@@ -1,9 +1,10 @@
 /*
- BREATHE // INSTRUMENT OS 4.4.4 -- 06 October 2026
+ BREATHE // INSTRUMENT OS 4.4.5 -- 06 October 2026
  Gas main title: VoC AIR QUALITY; calibration details remain on gas-info6.
  Brighter cyan, amber and violet ribbons frame IAQ; motion requires a valid reading.
- Text colors +20%; temperature/RH displays use whole numbers; main pressure label BARO.
- Environment temperature and its history use SCD41.
+ Text colors +20% then +30%; main ribbons +30% more; T/RH display whole numbers.
+ Environment temperature/history use Si7021; RH is the mean of Si7021 and BME680.
+ Si7021 heater off, CRC checked, asynchronous 2-second sampling on shared I2C 0x40.
  Smaller CO2 eye with caption clearance; registration frame removed on every screen.
  Four main screens; sensor info by long press; service pages by triple-click only.
  Short press: next in current layer. Hold: information / return. Triple: service / return.
@@ -18,9 +19,10 @@
    gas-info2: resistance graph; gas-info3: raw/filter/baseline/ratio/deviation;
    gas-info4: heater status; gas-info5: statistics; gas-info6: IAQ diagnostics;
    gas-info7: IAQ history.
-   env-main: SCD41 temperature, BME RH/pressure; env-info1: raw BME readings;
+   env-main: Si7021 temperature, averaged RH, BME pressure; env-info1: raw BME readings;
    env-info2: dew point; env-info3: absolute humidity; env-info4: pressure units;
-   env-info5: temperature history; env-info6: RH history; env-info7: pressure history.
+   env-info5: Si7021 temperature history; env-info6: averaged RH history;
+   env-info7: pressure history; env-info8: Si7021 / BME source comparison.
    sys-info1: sensor coverage; sys-info2: timing; sys-info3: health;
    sys-info4: configuration; sys-info5: light/backlight. Triple-click access only.
  The CO2 eye always uses the SCD41. The lungs screen has been removed.
@@ -76,6 +78,8 @@ constexpr bool BACKLIGHT_ACTIVE_HIGH = true;
 constexpr uint8_t BACKLIGHT_MIN = 24, BACKLIGHT_MAX = 255;
 constexpr float LIGHT_PATH_SCALE = 1.0f; // Tune after installing the clear light pipe.
 constexpr bool ENABLE_SCD41 = true;  // SCD41 connected at 0x62 on shared D4/D5 I2C bus.
+constexpr bool ENABLE_SI7021 = true; // Si7021 at 0x40 on the same D4/D5 bus, powered at 3.3V.
+constexpr uint32_t SI7021_STALE_MS = 6000;
 constexpr bool START_AUTO_TOUR = false;
 constexpr bool INTAKE_ON_LEFT = true; // Visual convention; flip for final enclosure.
 constexpr uint32_t FINAL_SPI_HZ = 40000000;
@@ -126,6 +130,8 @@ template<class T, int Capacity> struct Ring {
 Ring<EnvSample,180> envHistory;
 Ring<GasSample,100> gasHistory;
 Ring<ScalarSample,180> pmHistory, co2History, temperatureHistory;
+// Both humidity sources can update independently (Si7021 ~2s, BME ~3s).
+Ring<ScalarSample,300> humidityHistory;
 
 struct Environment {
  bool present=false, configured=false, have=false, pending=false;
@@ -208,10 +214,27 @@ struct CO2State {
  uint64_t ms=0; float ppm=NAN, t=NAN, rh=NAN;
  uint8_t phase=0; uint32_t nextAt=0, good=0, bad=0;
 } co2;
+struct Si7021State {
+ bool present=false, configured=false, have=false, lastOK=false;
+ uint8_t phase=0, userRegister=0;
+ uint32_t nextAt=100, good=0, bad=0; // Allow the initial power-up interval.
+ uint64_t ms=0;
+ float t=NAN, rh=NAN, pendingRh=NAN;
+} si7021;
 bool envFresh() { return env.have && nowMs()-env.ms<ENV_STALE_MS; }
 bool gasFresh() { return env.gasAccepted && gas.have && nowMs()-gas.ms<ENV_STALE_MS; }
 bool pmFresh() { return nowMs()-pmsStartedMs>=PMS_WARMUP_MS && pm.have && pm.latestOK && nowMs()-pm.ms<PM_STALE_MS; }
 bool co2Fresh() { return co2.have && co2.lastOK && nowMs()-co2.ms<CO2_STALE_MS; }
+bool si7021Fresh() { return ENABLE_SI7021 && si7021.configured && si7021.have && si7021.lastOK && nowMs()-si7021.ms<SI7021_STALE_MS; }
+bool environmentHumidityFresh() { return si7021Fresh() && envFresh(); }
+float environmentTemperatureF() { return si7021Fresh()?fahrenheit(si7021.t):NAN; }
+float environmentHumidity() { return environmentHumidityFresh()?(si7021.rh+env.rh)*0.5f:NAN; }
+void recordEnvironmentHumidity() {
+ static uint64_t lastSi=0,lastBme=0;
+ if(!environmentHumidityFresh() || (lastSi==si7021.ms && lastBme==env.ms))return;
+ ScalarSample s;s.ms=nowMs();s.value=environmentHumidity();humidityHistory.push(s);
+ lastSi=si7021.ms;lastBme=env.ms;
+}
 
 
 struct IAQState {
@@ -491,8 +514,70 @@ void serviceCO2() {
   co2.rh=100.0f*be16(data+6)/65535.0f; co2.ms=nowMs();
   co2.have=co2.lastOK=true; ++co2.good;
   { ScalarSample s; s.ms=co2.ms; s.value=co2.ppm; co2History.push(s); }
-  { ScalarSample s; s.ms=co2.ms; s.value=co2.t; temperatureHistory.push(s); }
   co2.phase=2; co2.nextAt=n+1000; break;
+ }
+}
+
+// Si7021-A20: no-hold conversions leave the shared bus and animation running.
+// RH and temperature are checked separately with CRC-8 (poly 0x31, init 0).
+// The 0xE0 cached-temperature command has no CRC, so use 0xF3 for temperature.
+bool si7021Command(uint8_t command) {
+ Wire.beginTransmission(0x40);Wire.write(command);
+ return Wire.endTransmission()==0;
+}
+bool si7021ReadWord(uint16_t& word) {
+ uint8_t data[3];
+ if(Wire.requestFrom((uint8_t)0x40,(uint8_t)3)!=3) {
+  while(Wire.available())Wire.read();return false;
+ }
+ for(int i=0;i<3;++i)data[i]=(uint8_t)Wire.read();
+ uint8_t crc=0;
+ for(int i=0;i<2;++i) {crc^=data[i];for(int bit=0;bit<8;++bit)crc=(crc&0x80)?(crc<<1)^0x31:crc<<1;}
+ if(crc!=data[2])return false;
+ word=((uint16_t)data[0]<<8)|data[1];return true;
+}
+void si7021Failure() {
+ ++si7021.bad;si7021.lastOK=si7021.configured=false;
+ si7021.pendingRh=NAN;si7021.phase=0;si7021.nextAt=millis()+10000;
+}
+void serviceSi7021() {
+ if(!ENABLE_SI7021 || !due32(millis(),si7021.nextAt))return;
+ uint8_t reg=0;uint16_t raw=0;
+ switch(si7021.phase) {
+ case 0:
+  si7021.present=si7021Command(0xFE); // Reset after power-up or a failed cycle.
+  if(!si7021.present){si7021Failure();return;}
+  si7021.phase=1;si7021.nextAt=millis()+20;break;
+ case 1:
+  if(!registerBytes(0x40,0xE7,&reg,1)){si7021Failure();return;}
+  // Preserve reserved bits; 12-bit RH / 14-bit T, with the heater OFF.
+  reg&=(uint8_t)~0x85;
+  Wire.beginTransmission(0x40);Wire.write(0xE6);Wire.write(reg);
+  if(Wire.endTransmission()!=0){si7021Failure();return;}
+  si7021.phase=2;si7021.nextAt=millis();break;
+ case 2:
+  // Verify configuration on every cycle, including after an unexpected reset.
+  if(!registerBytes(0x40,0xE7,&reg,1) || (reg&0xC5)!=0) {
+   si7021Failure();return; // Wrong resolution, heater enabled, or supply too low.
+  }
+  si7021.userRegister=reg;si7021.configured=true;
+  if(!si7021Command(0xF5)){si7021Failure();return;}
+  si7021.phase=3;si7021.nextAt=millis()+30;break;
+ case 3:
+  if(!si7021ReadWord(raw) || (raw&3)!=2){si7021Failure();return;}
+  si7021.pendingRh=clipf(125.0f*(raw&0xFFFC)/65536.0f-6.0f,0,100);
+  if(!si7021Command(0xF3)){si7021Failure();return;}
+  si7021.phase=4;si7021.nextAt=millis()+15;break;
+ case 4: {
+  if(!si7021ReadWord(raw) || (raw&3)!=0){si7021Failure();return;}
+  const float t=175.72f*(raw&0xFFFC)/65536.0f-46.85f;
+  if(!isfinite(t) || t< -40 || t>125 || !isfinite(si7021.pendingRh)) {si7021Failure();return;}
+  // Publish a complete validated pair; never combine a partial failed cycle.
+  si7021.t=t;si7021.rh=si7021.pendingRh;si7021.ms=nowMs();
+  si7021.have=si7021.lastOK=true;++si7021.good;
+  ScalarSample s;s.ms=si7021.ms;s.value=t;temperatureHistory.push(s);
+  si7021.phase=2;si7021.nextAt=millis()+SAMPLE_MS;break;
+ }
  }
 }
 
@@ -508,7 +593,7 @@ uint8_t subpage=0,trendMetric=0,infoOrdinal=0,infoTotal=0;
 uint64_t pageSince=0,transitionAt=0,bootAt=0;
 uint32_t spiHz=FINAL_SPI_HZ;
 constexpr uint8_t SYSTEM_DETAIL_COUNT=5;
-uint8_t localDetailCount(){switch(page){case EYE:return 2;case AIR_SAMPLE:return 2;case CHEMISTRY:return 7;case ENVIRONMENT:return 7;default:return 0;}}
+uint8_t localDetailCount(){switch(page){case EYE:return 2;case AIR_SAMPLE:return 2;case CHEMISTRY:return 7;case ENVIRONMENT:return 8;default:return 0;}}
 uint8_t detailCount(){return serviceMode?SYSTEM_DETAIL_COUNT:localDetailCount();}
 void screenID(char* out,size_t length){
  if(serviceMode)snprintf(out,length,"sys-info%u",subpage+1);
@@ -1448,10 +1533,11 @@ uint16_t mix(uint16_t a,uint16_t b,float f) {
  return ((int)(ar+(br-ar)*f)<<11)|((int)(ag+(bg-ag)*f)<<5)|(int)(ab+(bb-ab)*f);
 }
 uint16_t brighterText(uint16_t color) {
- // Increase text RGB channels by 20%, with rounding and saturation at full white.
- const int r=clipi((((color>>11)&31)*6+2)/5,0,31);
- const int g=clipi((((color>>5)&63)*6+2)/5,0,63);
- const int b=clipi(((color&31)*6+2)/5,0,31);
+ // Original +20%, then an additional +30%: 1.20 * 1.30 = 1.56.
+ // Round once in RGB565 and saturate channels at full intensity.
+ const int r=clipi((((color>>11)&31)*39+12)/25,0,31);
+ const int g=clipi((((color>>5)&63)*39+12)/25,0,63);
+ const int b=clipi(((color&31)*39+12)/25,0,31);
  return (r<<11)|(g<<5)|b;
 }
 int textWidth(Adafruit_GFX& d,const char* s,const GFXfont* f) {
@@ -1605,7 +1691,7 @@ void gasMainRibbons(Adafruit_GFX& d,bool live){
    const float wave=3.5f*sinf(u*6.2831853f+phase+strand*.45f+band*1.7f)
     +1.5f*sinf(u*12.566371f-phase+strand*.7f);
    const int y=base+lroundf(envelope*wave);
-   const float glow=(strand==2?.48f:strand%2?.32f:.29f)*envelope;
+   const float glow=(strand==2?.48f:strand%2?.32f:.29f)*1.30f*envelope;
    d.drawLine(px,py,x,y,mix(BLACK,live?colors[strand]:DIM,live?glow:glow*.40f));
    px=x;py=y;
   }
@@ -1664,11 +1750,11 @@ void pressureBar(Adafruit_GFX& d,float pressure,int y){
 
 void environmentMain(Adafruit_GFX& d){
  mainHeader(d,"ENVIRONMENT");bool fresh=envFresh();
- const float temperature=co2Fresh()?fahrenheit(co2.t):NAN;
+ const float temperature=environmentTemperatureF(), humidity=environmentHumidity();
  text(d,12,52,"TEMP",&LabelFont,DIM);value(d,143,47,temperature,0,&NumberFont,WHITE,122);right(d,228,56,"F",&LabelFont,CYAN);
- text(d,12,96,"RH",&LabelFont,DIM);value(d,143,90,fresh?env.rh:NAN,0,&NumberFont,WHITE,122);right(d,228,99,"%",&LabelFont,CYAN);
+ text(d,12,96,"RH",&LabelFont,DIM);value(d,143,90,humidity,0,&NumberFont,WHITE,122);right(d,228,99,"%",&LabelFont,CYAN);
  text(d,12,138,"BARO",&LabelFont,DIM);value(d,133,133,fresh?env.p/3386.389f:NAN,2,&NumberFont,WHITE,132);right(d,228,146,"inHg",&SmallFont,CYAN);
- const float vals[3]={temperature,fresh?env.rh:NAN,fresh?env.p/3386.389f:NAN};
+ const float vals[3]={temperature,humidity,fresh?env.p/3386.389f:NAN};
  const float lo[3]={40,0,28},hi[3]={100,100,31};const char* labels[3]={"F","%RH","inHg"};
  for(int i=0;i<3;++i){int y=180+i*20;char b[12];text(d,12,y,labels[i],&SmallFont,DIM);
   snprintf(b,sizeof(b),"%.0f",lo[i]);right(d,70,y,b,&SmallFont,DIM);snprintf(b,sizeof(b),"%.0f",hi[i]);right(d,228,y,b,&SmallFont,DIM);
@@ -1811,19 +1897,20 @@ void gasRibbon(Adafruit_GFX& d) {
 // Lungs screen removed. Gas IAQ is rendered by gasMain().
 
 // --------------------- Real history, one channel at a time ----------------
-const char* METRIC_NAMES[7]={"GAS / kOhm","PM2.5 / ug/m3","CO2 / ppm","SCD41 TEMP / F","HUMIDITY / %","PRESSURE / inHg","BOSCH IAQ"};
+const char* METRIC_NAMES[7]={"GAS / kOhm","PM2.5 / ug/m3","CO2 / ppm","Si7021 TEMP / F","RH AVERAGE / %","PRESSURE / inHg","BOSCH IAQ"};
 struct PlotPoint { uint64_t ms=0;float v=NAN; };
-int metricCount(int m) { return m==6?iaqHistory.count:m==0?gasHistory.count:m==1?pmHistory.count:m==2?co2History.count:m==3?temperatureHistory.count:envHistory.count; }
+int metricCount(int m) { return m==6?iaqHistory.count:m==0?gasHistory.count:m==1?pmHistory.count:m==2?co2History.count:m==3?temperatureHistory.count:m==4?humidityHistory.count:envHistory.count; }
 PlotPoint metricPoint(int m,int i) {
  PlotPoint p;
  if(m==6) {const ScalarSample&s=iaqHistory.at(i);p.ms=s.ms;p.v=s.value;}
  else if(m==0) { const GasSample&s=gasHistory.at(i);p.ms=s.ms;p.v=s.raw; }
  else if(m==1 || m==2) { const ScalarSample&s=m==1?pmHistory.at(i):co2History.at(i);p.ms=s.ms;p.v=s.value; }
  else if(m==3) { const ScalarSample&s=temperatureHistory.at(i);p.ms=s.ms;p.v=fahrenheit(s.value); }
- else { const EnvSample&s=envHistory.at(i);p.ms=s.ms;p.v=m==4?s.rh:s.p/3386.389f; }
+ else if(m==4) { const ScalarSample&s=humidityHistory.at(i);p.ms=s.ms;p.v=s.value; }
+ else { const EnvSample&s=envHistory.at(i);p.ms=s.ms;p.v=s.p/3386.389f; }
  return p;
 }
-bool metricFresh(int m) { return m==6?iaqReady():m==0?gasFresh():m==1?pmFresh():(m==2||m==3)?co2Fresh():envFresh(); }
+bool metricFresh(int m) { return m==6?iaqReady():m==0?gasFresh():m==1?pmFresh():m==2?co2Fresh():m==3?si7021Fresh():m==4?environmentHumidityFresh():envFresh(); }
 void trendScreen(Adafruit_GFX& d) {
  int m=trendMetric, count=metricCount(m);uint64_t n=nowMs();
  text(d,12,15,METRIC_NAMES[m],&LabelFont,CYAN);
@@ -1842,7 +1929,7 @@ void trendScreen(Adafruit_GFX& d) {
  for(int i=0;i<count;++i) {
   PlotPoint p=metricPoint(m,i);if(n-p.ms>window)continue;
   int x=228-(int)((n-p.ms)*216/window),y=plotY(p.v,lo,hi,95,177);
-  uint32_t gap=m==1?PM_STALE_MS:(m==2||m==3)?CO2_STALE_MS:ENV_STALE_MS;
+  uint32_t gap=m==1?PM_STALE_MS:m==2?CO2_STALE_MS:m==3?SI7021_STALE_MS:ENV_STALE_MS;
   if(prev && p.ms-pt<=gap)d.drawLine(px,py,x,y,metricFresh(m)?CYAN:DIM);
   else d.drawPixel(x,y,DIM);
   px=x;py=y;pt=p.ms;prev=true;
@@ -1858,16 +1945,17 @@ void serviceScreen(Adafruit_GFX& d) {
   (unsigned long)(up/60)%60,(unsigned long)up%60);
  else fmt(d,12,13,&LabelFont,GREEN,"UP %lud %02lu:%02lu",(unsigned long)(up/86400),
   (unsigned long)(up/3600)%24,(unsigned long)(up/60)%60);
- const char* names[4]={"PMS5003","BME680","SCD41","VOC IAQ"};
- bool good[4]={pmFresh(),envFresh(),co2Fresh(),iaqReady()};
- const char* states[4]={pmFresh()?"LIVE":"WAIT",envFresh()?"LIVE":env.present?"WAIT":"FAULT",
-  co2Fresh()?"LIVE":ENABLE_SCD41?"WAIT":"OFF",iaqReady()?"LIVE":iaq.initialized?"LEARN":"FAULT"};
- const char* notes[4]={"UART / CHECKSUM FRAMES",gasFresh()?"GAS + CLIMATE":"CLIMATE / GAS CHECK",
-  ENABLE_SCD41?"I2C / CRC CHECKED":"NOT ENABLED","BOSCH IAQ / GAS INDEX"};
- for(int i=0;i<4;++i) {
-  int y=47+i*37;d.fillRect(12,y,4,13,good[i]?GREEN:AMBER);
+ const char* names[5]={"PMS5003","BME680","SCD41","Si7021","VOC IAQ"};
+ bool good[5]={pmFresh(),envFresh(),co2Fresh(),si7021Fresh(),iaqReady()};
+ const char* states[5]={pmFresh()?"LIVE":"WAIT",envFresh()?"LIVE":env.present?"WAIT":"FAULT",
+  co2Fresh()?"LIVE":ENABLE_SCD41?"WAIT":"OFF",si7021Fresh()?"LIVE":ENABLE_SI7021?"WAIT":"OFF",
+  iaqReady()?"LIVE":iaq.initialized?"LEARN":"FAULT"};
+ const char* notes[5]={"UART / CHECKSUM FRAMES",gasFresh()?"GAS + CLIMATE":"CLIMATE / GAS CHECK",
+  ENABLE_SCD41?"I2C / CRC CHECKED":"NOT ENABLED","ENV TEMP + RH / 0x40","BOSCH IAQ / GAS INDEX"};
+ for(int i=0;i<5;++i) {
+  int y=43+i*30;d.fillRect(12,y,4,13,good[i]?GREEN:AMBER);
   text(d,24,y,names[i],&LabelFont);right(d,228,y,states[i],&LabelFont,good[i]?GREEN:AMBER);
-  text(d,24,y+20,notes[i],&SmallFont,DIM);
+  text(d,24,y+17,notes[i],&SmallFont,DIM);
  }
  rule(d,195);
  row(d,205,"WI-FI",WiFi.status()==WL_CONNECTED?"ONLINE":"OFFLINE",WiFi.status()==WL_CONNECTED?GREEN:DIM);
@@ -2158,6 +2246,18 @@ void eyeDetails(Adafruit_GFX& d){
  text(d,12,180,"SCD41 periodic / CRC-8",&SmallFont,DIM);
 }
 
+void environmentSources(Adafruit_GFX& d) {
+ const bool sf=si7021Fresh(),hf=environmentHumidityFresh();
+ consoleHeader(d,"ENV // SOURCES",7,8,hf);
+ datum(d,48,"Si TEMP",environmentTemperatureF(),0," F");
+ datum(d,76,"Si RH",sf?si7021.rh:NAN,0," %");
+ datum(d,104,"BME RH",envFresh()?env.rh:NAN,0," %");
+ datum(d,132,"AVG RH",environmentHumidity(),0," %");
+ datum(d,160,"Si AGE",si7021.have?(nowMs()-si7021.ms)/1000.0f:NAN,1," s");
+ datum(d,188,"Si ERR",si7021.bad,0,"");
+ smallNote(d,217,hf?"RH = (Si + BME) / 2":!sf?"Si7021 / WAIT":"BME680 RH / WAIT",hf?DIM:AMBER);
+}
+
 
 
 void systemDetails(Adafruit_GFX& d) {
@@ -2229,7 +2329,7 @@ void detailsScreen(Adafruit_GFX& d){
    case 5:iaqDetails(d);break;
    case 6:trendMetric=6;trendScreen(d);break;
   }break;
-  case ENVIRONMENT:if(selected<4)environmentDetails(d);else {trendMetric=selected-1;trendScreen(d);}break;
+  case ENVIRONMENT:if(selected<4)environmentDetails(d);else if(selected==7)environmentSources(d);else {trendMetric=selected-1;trendScreen(d);}break;
   default:break;
  }
  subpage=selected;
@@ -2282,10 +2382,10 @@ uint32_t reconnectAt=0, logAt=0, wifiDropouts=0, httpRequests=0;
 String jsonNumber(double v,int decimals=3) { return isfinite(v)?String(v,decimals):String("null"); }
 String jsonBool(bool v) { return v?String("true"):String("false"); }
 String statusJSON() {
- const bool ef=envFresh(), gf=gasFresh(), pf=pmFresh(), cf=co2Fresh();
+ const bool ef=envFresh(), gf=gasFresh(), pf=pmFresh(), cf=co2Fresh(), sf=si7021Fresh();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
- String s; s.reserve(2500);
- s="{\"firmware\":\"BREATHE 4.4.4\",\"page\":\"";s+=PAGE_NAMES[page];
+ String s; s.reserve(3300);
+ s="{\"firmware\":\"BREATHE 4.4.5\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -2339,6 +2439,17 @@ String statusJSON() {
  s+=",\"baud\":9600,\"sensor_error\":"+String(pm.error)+"}";
  s+=",\"co2\":{\"enabled\":"+jsonBool(ENABLE_SCD41)+",\"fresh\":"+jsonBool(cf);
  s+=",\"ppm\":"+jsonNumber(cf?co2.ppm:NAN,0)+"}";
+ s+=",\"si7021\":{\"enabled\":"+jsonBool(ENABLE_SI7021)+",\"found\":"+jsonBool(si7021.present);
+ s+=",\"configured\":"+jsonBool(si7021.configured)+",\"fresh\":"+jsonBool(sf);
+ s+=",\"temperature_C\":"+jsonNumber(sf?si7021.t:NAN)+",\"humidity_pct\":"+jsonNumber(sf?si7021.rh:NAN);
+ s+=",\"age_s\":"+jsonNumber(si7021.have?(nowMs()-si7021.ms)/1000.0:NAN,1);
+ s+=",\"heater_enabled\":"+String(si7021.configured?((si7021.userRegister&4)?"true":"false"):"null");
+ s+=",\"good\":"+String(si7021.good)+",\"failed\":"+String(si7021.bad)+"}";
+ s+=",\"environment\":{\"temperature_source\":\"Si7021\",\"humidity_sources\":[\"Si7021\",\"BME680\"]";
+ s+=",\"temperature_F\":"+jsonNumber(environmentTemperatureF());
+ s+=",\"humidity_average_pct\":"+jsonNumber(environmentHumidity());
+ s+=",\"temperature_fresh\":"+jsonBool(sf)+",\"humidity_fresh\":"+jsonBool(environmentHumidityFresh());
+ s+=",\"pressure_inHg\":"+jsonNumber(ef?env.p/3386.389f:NAN)+"}";
  s+=",\"light\":{\"found\":"+jsonBool(light.present)+",\"fresh\":"+jsonBool(lightFresh());
  s+=",\"lux_estimate\":"+jsonNumber(lightFresh()&&!light.saturated?light.lux:NAN,1);
  s+=",\"saturated\":"+jsonBool(light.saturated)+",\"raw\":"+jsonNumber(lightFresh()?light.raw:NAN,0);
@@ -2375,7 +2486,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.4.4</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.4.5</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Gas AQI displays the Bosch IAQ index after run-in and calibration; it is not EPA AQI. Raw gas and bVOC equivalent remain distinct. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -2410,7 +2521,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.4.4");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.4.5");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);
@@ -2440,6 +2551,7 @@ void setup() {
  Serial.println("a/SPACE auto-tour | s status | b boot | 1/4 10/40MHz SPI");
  if(BUTTON_GPIO<0)Serial.println("Physical button disabled: confirmed working configuration was GPIO -1.");
  Serial.println("No demo sensor readings. Bosch BSEC2 IAQ enabled; readiness gated. SCD41 on I2C 0x62.");
+ Serial.println("Environment: Si7021 temperature (0x40), RH average of Si7021 + BME680, BME680 pressure.");
 }
 void loop() {
  static uint64_t nextFrame=0,previousLoop=0;
@@ -2448,7 +2560,7 @@ void loop() {
  previousLoop=now;
  serviceButton();
  for(int i=0;i<32 && Serial.available();++i)command((char)Serial.read());
- servicePMS();serviceCO2();serviceBME();serviceLight();serviceNetwork();
+ servicePMS();serviceCO2();serviceBME();serviceSi7021();recordEnvironmentHumidity();serviceLight();serviceNetwork();
  if(autoTour && !detail && !bootActive && nowMs()-pageSince>=TOUR_MS) {
   page=(Page)((page+1)%PAGE_COUNT);pageSince=transitionAt=nowMs();
  }

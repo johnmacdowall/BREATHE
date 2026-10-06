@@ -1,18 +1,21 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.4**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.4.5**, with the reviewed screen changes from October 6, 2026.
 Temperature and relative humidity display as whole numbers, including their history
 labels; sensor values and calculations keep full precision. Environment's pressure
-label is **BARO**. All text colors are increased by 20%, capped at full intensity.
+label is **BARO**. Text colors are 30% brighter again after the previous 20% increase
+(1.20 x 1.30 = 1.56 times the original channels), capped at full intensity.
 The gas main screen is titled **VoC AIR QUALITY**, without the Bosch/VOC subtitle
 or calibration status. Calibration details remain on `gas-info6`.
-Brighter cyan gas ribbons, with additional amber and violet layers, drift around the
+Cyan, amber and violet gas ribbons are another 30% brighter and drift around the
 main number on a 14-second cycle. The colors suggest a mixed VOC response; they do
 not represent individually measured gases. The ribbons are decorative, leave the
 number and scale clear, and become dim and stationary while
 the reading is unavailable. The original long-press chamber animation is retained.
-Environment temperature and its history now use the SCD41.
+Environment temperature and its history use the **Si7021**. Environment RH and
+its history show the arithmetic mean of **Si7021 RH and BME680 RH**. The new
+`env-info8` page shows the source readings and average; Service coverage includes Si7021.
 The CO2 eye is smaller with space above its caption; edge registration marks have
 been removed from all screens. The subtle eye animation is retained.
 
@@ -62,19 +65,27 @@ Service pages are excluded from the normal main and sensor-information cycles.
 | `co2` | Eye with SCD41 ppm | 1: readings; 2: history |
 | `pms` | Total particles above 0.3 um per 0.1 L | 1: combined mass/counts/size bands; 2: PM2.5 history |
 | `gas` | VoC Air Quality (Bosch IAQ) | 1: original chamber/heater animation; 2: resistance graph; 3: raw/filter/baseline/ratio/deviation; 4: heater status; 5: statistics; 6: IAQ diagnostics; 7: IAQ history |
-| `env` | SCD41 temperature, BME680 RH and pressure in inHg | 1: raw BME readings; 2: BME dew point; 3: BME absolute humidity; 4: pressure units; 5: SCD41 temperature history; 6: RH history; 7: pressure history |
+| `env` | Si7021 temperature, averaged Si7021/BME680 RH, BME680 pressure in inHg | 1: raw BME readings; 2: BME dew point; 3: BME absolute humidity; 4: pressure units; 5: Si7021 temperature history; 6: averaged RH history; 7: pressure history; 8: temperature/RH source comparison |
 | `sys` | Triple-click access only | 1: sensor coverage; 2: timing; 3: health; 4: configuration; 5: light/backlight |
 
 IDs use `co2-main`, `co2-info1`, etc. Main-screen order is Particle Count, CO2, VoC Air Quality,
-Environment. There are **27 screens**. Information pages have been renumbered after
+Environment. There are **28 screens**. Information pages have been renumbered after
 the removals and consolidation.
 
 Environment's temperature number, Fahrenheit scale bar, and temperature history
-use SCD41 readings with their own freshness check. Missing or stale SCD41 data
-shows `--`; there is no automatic fallback to Bosch temperature. Environment RH
-and pressure still use the BME680. Raw BME temperature and its paired-temperature/RH
-moisture calculations remain available on the explicitly labeled BME information
-pages. SCD41 temperature is displayed only in the Environment group.
+use only the Si7021. RH, its scale bar and history use `(Si7021 RH + BME680 RH) / 2`,
+calculated before display rounding. Both humidity readings must be fresh (under
+six seconds old). A missing, failed or stale Si7021 shows `--` for temperature and
+averaged RH; missing/stale BME data shows `--` for averaged RH and pressure.
+There is no automatic fallback to another temperature probe or a single RH source.
+
+The Si7021 is read about every two seconds using nonblocking no-hold conversions,
+CRC validation for both measurements, and automatic retries after communication
+failure. Its heater stays off; sensor values and history retain full precision.
+`env-info8` shows Si temperature, Si RH, BME RH, averaged RH, Si sample age and errors.
+The local `/status` JSON exposes the same sources and sensor health separately.
+Raw BME temperature and its paired-temperature/RH moisture calculations remain on
+the explicitly labeled BME information pages. SCD41 continues to supply CO2.
 Sensor calibration offsets have not been changed.
 
 The Environment pressure bar retains the current-pressure marker. A fading cyan
@@ -92,7 +103,7 @@ saved in NVS; screen histories are RAM-only.
 
 | Connection | XIAO pin / GPIO |
 | --- | --- |
-| BME680, SCD41, VEML7700 shared I2C SDA | D4 / GPIO6 |
+| BME680, SCD41, Si7021, VEML7700 shared I2C SDA | D4 / GPIO6 |
 | Shared I2C SCL | D5 / GPIO7 |
 | ST7789 SCK | D8 / GPIO8 |
 | ST7789 MOSI | D10 / GPIO10 |
@@ -102,6 +113,10 @@ saved in NVS; screen histories are RAM-only.
 | Button to ground (internal pull-up) | D1 / GPIO3 |
 | PMS UART receive | D7 / GPIO20 |
 | PMS UART transmit (no commands currently sent) | D6 / GPIO21 |
+
+Connect Si7021 **VCC to 3.3V**, **GND to GND**, **SDA to D4/GPIO6**, and
+**SCL to D5/GPIO7**. Its I2C address is **0x40**. Place it away from the Bosch
+heater, display and processor heat when evaluating room temperature.
 
 The PMS connection names in `src/main.cpp` preserve the existing working PIM477
 wiring. Sensor acquisition, light control, and display pin assignments are retained
