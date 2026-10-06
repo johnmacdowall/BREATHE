@@ -1,7 +1,7 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.7**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.4.8**, with the reviewed screen changes from October 6, 2026.
 Temperature and relative humidity display as whole numbers, including their history
 labels; sensor values and calculations keep full precision. Environment's pressure
 label is **BARO**. Text colors are 30% brighter again after the previous 20% increase
@@ -17,17 +17,21 @@ Environment temperature and its history use the **Si7021**. Environment RH and
 its history show the arithmetic mean of **Si7021 RH and BME680 RH**. The new
 `env-info8` page shows the source readings and average; Service coverage includes Si7021.
 The CO2 eye is moved up four pixels to center it between its title and lower caption.
-CO2, particle count and VoC main numbers share a 33-pixel-high font; CO2 uses a
+CO2, Particle AQI, particle count and VoC numbers share a 33-pixel-high font; CO2 uses a
 compact fallback for five-digit readings. The subtle eye animation is retained.
-Environment **F**, **%** and **inHg** use the same font and baseline as their numbers.
-Empty character-side spacing is trimmed to fit full-size units in the existing
-three-row layout. Edge registration marks remain removed.
+Environment uses one consistent sans-serif font family, with a clear title,
+aligned labels and reading columns. **F**, **%** and **inHg** use the same size,
+font and baseline as their numbers. The three-row layout, all readings, and the
+bottom bars with their pressure trend are preserved. The embedded Environment
+fonts are covered by [FONT-LICENSE.txt](FONT-LICENSE.txt).
+Edge registration marks remain removed.
 
-The particle radar now remains visible beside the main number as well as above
-and below it: only the text itself is masked. The main number is labeled
-**TOTAL >0.3 um**. `pms-info1`, now titled **PMS // COUNTS**, uses a large two-column,
-three-row layout for the six cumulative size thresholds. The former mass-summary
-and three derived size-band panels have been removed from that page.
+**PARTICLE AQI** is now the main radar screen. It shows a **LIVE ESTIMATE** from
+PMS5003 mass readings, a category label, and a six-color EPA scale from 0 to 500.
+The radar remains visible around the number; only the text itself is masked.
+The previous **TOTAL >0.3 um** count radar is now `pms-info3`.
+`pms-info1`, titled **PMS // COUNTS**, retains the large two-column, three-row
+layout for the six cumulative size thresholds. `pms-info2` retains PM2.5 history.
 
 ## Open in Visual Studio Code
 
@@ -73,13 +77,13 @@ Service pages are excluded from the normal main and sensor-information cycles.
 | Group | Main screen | Information pages, in order |
 | --- | --- | --- |
 | `co2` | Eye with SCD41 ppm | 1: readings; 2: history |
-| `pms` | Total particles above 0.3 um per 0.1 L | 1: six large cumulative size counts; 2: PM2.5 history |
+| `pms` | Particle AQI live estimate with radar and 0-500 scale | 1: six large cumulative size counts; 2: PM2.5 history; 3: total particles above 0.3 um per 0.1 L with radar |
 | `gas` | VoC Air Quality (Bosch IAQ) | 1: original chamber/heater animation; 2: resistance graph; 3: raw/filter/baseline/ratio/deviation; 4: heater status; 5: statistics; 6: IAQ diagnostics; 7: IAQ history |
 | `env` | Si7021 temperature, averaged Si7021/BME680 RH, BME680 pressure in inHg | 1: raw BME readings; 2: BME dew point; 3: BME absolute humidity; 4: pressure units; 5: Si7021 temperature history; 6: averaged RH history; 7: pressure history; 8: temperature/RH source comparison |
 | `sys` | Triple-click access only | 1: sensor coverage; 2: timing; 3: health; 4: configuration; 5: light/backlight |
 
-IDs use `co2-main`, `co2-info1`, etc. Main-screen order is Particle Count, CO2, VoC Air Quality,
-Environment. There are **28 screens**. Information pages have been renumbered after
+IDs use `co2-main`, `co2-info1`, etc. Main-screen order is Particle AQI, CO2, VoC Air Quality,
+Environment. There are **29 screens**. Information pages have been renumbered after
 the removals and consolidation.
 
 Environment's temperature number, Fahrenheit scale bar, and temperature history
@@ -110,11 +114,22 @@ thresholds (0.5, 1.0, 2.5, 5.0 and 10 micrometers) is a subset of that total;
 adding all six would count some particles repeatedly. The six info-page readings
 retain the sensor's cumulative meaning rather than representing disjoint bins.
 
-Particulate AQI uses PM2.5/PM10 **mass concentration** in micrograms per cubic
-meter, with the appropriate averaging method, rather than the summed particle
-counts. BREATHE does not currently calculate a separate particulate AQI. Its
-VoC index remains Bosch IAQ and does not incorporate PMS readings. PM2.5 mass
-remains visible on `pms-info2`; all three mass channels remain in the status JSON.
+The Particle AQI live estimate uses the PMS5003's atmospheric PM2.5 and PM10
+**mass concentrations** in micrograms per cubic meter, not summed particle counts
+or the sensor's CF=1 fields. Each mass reading is converted with the EPA May 2026
+breakpoint table, rounded to the nearest integer, and the higher subindex is
+displayed. PM2.5 uses tenths and PM10 whole micrograms per cubic meter; the sensor
+itself reports whole mass values. Above 500, the highest band is extrapolated:
+the actual number remains visible, the marker stops at 500, and **ABOVE SCALE**
+appears. Missing, stale or warming-up mass data shows `--`.
+
+This calculation uses the current sample without daily or NowCast averaging, so
+the main screen explicitly says **LIVE ESTIMATE**. It is not an official daily
+AQI or NowCast. The status JSON exposes both subindices, the dominant mass
+channel, category, validity and averaging method under `pms.aqi_live_estimate`.
+The VoC index remains separate Bosch IAQ and does not incorporate PMS readings.
+PM2.5 mass remains visible on `pms-info2`; all three mass channels and all six
+cumulative counts remain in the status JSON. Raw total counts are on `pms-info3`.
 References: [Plantower PMS5003 protocol](https://cdn-shop.adafruit.com/product-files/3686/plantower-pms5003-manual_v2-3.pdf)
 and [EPA AQI technical guidance](https://document.airnow.gov/technical-assistance-document-for-the-reporting-of-daily-air-quailty.pdf).
 
