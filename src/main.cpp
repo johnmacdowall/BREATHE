@@ -1,5 +1,6 @@
 /*
- BREATHE // INSTRUMENT OS 4.4.1 -- 06 October 2026
+ BREATHE // INSTRUMENT OS 4.4.2 -- 06 October 2026
+ Environment temperature and its history use SCD41.
  Smaller CO2 eye with caption clearance; registration frame removed on every screen.
  Four main screens; sensor info by long press; service pages by triple-click only.
  Short press: next in current layer. Hold: information / return. Triple: service / return.
@@ -14,7 +15,7 @@
    gas-info2: resistance graph; gas-info3: raw/filter/baseline/ratio/deviation;
    gas-info4: heater status; gas-info5: statistics; gas-info6: IAQ diagnostics;
    gas-info7: IAQ history.
-   env-main: temperature/RH/pressure; env-info1: raw BME readings;
+   env-main: SCD41 temperature, BME RH/pressure; env-info1: raw BME readings;
    env-info2: dew point; env-info3: absolute humidity; env-info4: pressure units;
    env-info5: temperature history; env-info6: RH history; env-info7: pressure history.
    sys-info1: sensor coverage; sys-info2: timing; sys-info3: health;
@@ -121,7 +122,7 @@ template<class T, int Capacity> struct Ring {
 };
 Ring<EnvSample,180> envHistory;
 Ring<GasSample,100> gasHistory;
-Ring<ScalarSample,180> pmHistory, co2History;
+Ring<ScalarSample,180> pmHistory, co2History, temperatureHistory;
 
 struct Environment {
  bool present=false, configured=false, have=false, pending=false;
@@ -487,6 +488,7 @@ void serviceCO2() {
   co2.rh=100.0f*be16(data+6)/65535.0f; co2.ms=nowMs();
   co2.have=co2.lastOK=true; ++co2.good;
   { ScalarSample s; s.ms=co2.ms; s.value=co2.ppm; co2History.push(s); }
+  { ScalarSample s; s.ms=co2.ms; s.value=co2.t; temperatureHistory.push(s); }
   co2.phase=2; co2.nextAt=n+1000; break;
  }
 }
@@ -1633,10 +1635,11 @@ void pressureBar(Adafruit_GFX& d,float pressure,int y){
 
 void environmentMain(Adafruit_GFX& d){
  mainHeader(d,"ENVIRONMENT");bool fresh=envFresh();
- text(d,12,52,"TEMP",&LabelFont,DIM);value(d,143,47,fresh?fahrenheit(env.t):NAN,1,&NumberFont,WHITE,122);right(d,228,56,"F",&LabelFont,CYAN);
+ const float temperature=co2Fresh()?fahrenheit(co2.t):NAN;
+ text(d,12,52,"TEMP",&LabelFont,DIM);value(d,143,47,temperature,1,&NumberFont,WHITE,122);right(d,228,56,"F",&LabelFont,CYAN);
  text(d,12,96,"RH",&LabelFont,DIM);value(d,143,90,fresh?env.rh:NAN,1,&NumberFont,WHITE,122);right(d,228,99,"%",&LabelFont,CYAN);
  text(d,12,138,"P",&LabelFont,DIM);value(d,133,133,fresh?env.p/3386.389f:NAN,2,&NumberFont,WHITE,132);right(d,228,146,"inHg",&SmallFont,CYAN);
- const float vals[3]={fresh?fahrenheit(env.t):NAN,fresh?env.rh:NAN,fresh?env.p/3386.389f:NAN};
+ const float vals[3]={temperature,fresh?env.rh:NAN,fresh?env.p/3386.389f:NAN};
  const float lo[3]={40,0,28},hi[3]={100,100,31};const char* labels[3]={"F","%RH","inHg"};
  for(int i=0;i<3;++i){int y=180+i*20;char b[12];text(d,12,y,labels[i],&SmallFont,DIM);
   snprintf(b,sizeof(b),"%.0f",lo[i]);right(d,70,y,b,&SmallFont,DIM);snprintf(b,sizeof(b),"%.0f",hi[i]);right(d,228,y,b,&SmallFont,DIM);
@@ -1779,18 +1782,19 @@ void gasRibbon(Adafruit_GFX& d) {
 // Lungs screen removed. Gas IAQ is rendered by gasMain().
 
 // --------------------- Real history, one channel at a time ----------------
-const char* METRIC_NAMES[7]={"GAS / kOhm","PM2.5 / ug/m3","CO2 / ppm","TEMP / F","HUMIDITY / %","PRESSURE / inHg","BOSCH IAQ"};
+const char* METRIC_NAMES[7]={"GAS / kOhm","PM2.5 / ug/m3","CO2 / ppm","SCD41 TEMP / F","HUMIDITY / %","PRESSURE / inHg","BOSCH IAQ"};
 struct PlotPoint { uint64_t ms=0;float v=NAN; };
-int metricCount(int m) { return m==6?iaqHistory.count:m==0?gasHistory.count:m==1?pmHistory.count:m==2?co2History.count:envHistory.count; }
+int metricCount(int m) { return m==6?iaqHistory.count:m==0?gasHistory.count:m==1?pmHistory.count:m==2?co2History.count:m==3?temperatureHistory.count:envHistory.count; }
 PlotPoint metricPoint(int m,int i) {
  PlotPoint p;
  if(m==6) {const ScalarSample&s=iaqHistory.at(i);p.ms=s.ms;p.v=s.value;}
  else if(m==0) { const GasSample&s=gasHistory.at(i);p.ms=s.ms;p.v=s.raw; }
  else if(m==1 || m==2) { const ScalarSample&s=m==1?pmHistory.at(i):co2History.at(i);p.ms=s.ms;p.v=s.value; }
- else { const EnvSample&s=envHistory.at(i);p.ms=s.ms;p.v=m==3?fahrenheit(s.t):m==4?s.rh:s.p/3386.389f; }
+ else if(m==3) { const ScalarSample&s=temperatureHistory.at(i);p.ms=s.ms;p.v=fahrenheit(s.value); }
+ else { const EnvSample&s=envHistory.at(i);p.ms=s.ms;p.v=m==4?s.rh:s.p/3386.389f; }
  return p;
 }
-bool metricFresh(int m) { return m==6?iaqReady():m==0?gasFresh():m==1?pmFresh():m==2?co2Fresh():envFresh(); }
+bool metricFresh(int m) { return m==6?iaqReady():m==0?gasFresh():m==1?pmFresh():(m==2||m==3)?co2Fresh():envFresh(); }
 void trendScreen(Adafruit_GFX& d) {
  int m=trendMetric, count=metricCount(m);uint64_t n=nowMs();
  text(d,12,15,METRIC_NAMES[m],&LabelFont,CYAN);
@@ -1809,7 +1813,7 @@ void trendScreen(Adafruit_GFX& d) {
  for(int i=0;i<count;++i) {
   PlotPoint p=metricPoint(m,i);if(n-p.ms>window)continue;
   int x=228-(int)((n-p.ms)*216/window),y=plotY(p.v,lo,hi,95,177);
-  uint32_t gap=m==1?PM_STALE_MS:m==2?CO2_STALE_MS:ENV_STALE_MS;
+  uint32_t gap=m==1?PM_STALE_MS:(m==2||m==3)?CO2_STALE_MS:ENV_STALE_MS;
   if(prev && p.ms-pt<=gap)d.drawLine(px,py,x,y,metricFresh(m)?CYAN:DIM);
   else d.drawPixel(x,y,DIM);
   px=x;py=y;pt=p.ms;prev=true;
@@ -2251,7 +2255,7 @@ String statusJSON() {
  const bool ef=envFresh(), gf=gasFresh(), pf=pmFresh(), cf=co2Fresh();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(2500);
- s="{\"firmware\":\"BREATHE 4.4.1\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.4.2\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -2341,7 +2345,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.4.1</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.4.2</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Gas AQI displays the Bosch IAQ index after run-in and calibration; it is not EPA AQI. Raw gas and bVOC equivalent remain distinct. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -2376,7 +2380,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.4.1");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.4.2");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);

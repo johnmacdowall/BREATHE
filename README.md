@@ -1,7 +1,8 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.1**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.4.2**, with the reviewed screen changes from October 6, 2026.
+Environment temperature and its history now use the SCD41.
 The CO2 eye is smaller with space above its caption; edge registration marks have
 been removed from all screens. The subtle eye animation is retained.
 
@@ -51,12 +52,20 @@ Service pages are excluded from the normal main and sensor-information cycles.
 | `co2` | Eye with SCD41 ppm | 1: readings; 2: history |
 | `pms` | Total particles above 0.3 um per 0.1 L | 1: combined mass/counts/size bands; 2: PM2.5 history |
 | `gas` | Bosch IAQ | 1: original chamber/heater animation; 2: resistance graph; 3: raw/filter/baseline/ratio/deviation; 4: heater status; 5: statistics; 6: IAQ diagnostics; 7: IAQ history |
-| `env` | Temperature, RH, pressure in inHg | 1: raw readings; 2: dew point; 3: absolute humidity; 4: pressure units; 5: temperature history; 6: RH history; 7: pressure history |
+| `env` | SCD41 temperature, BME680 RH and pressure in inHg | 1: raw BME readings; 2: BME dew point; 3: BME absolute humidity; 4: pressure units; 5: SCD41 temperature history; 6: RH history; 7: pressure history |
 | `sys` | Triple-click access only | 1: sensor coverage; 2: timing; 3: health; 4: configuration; 5: light/backlight |
 
 IDs use `co2-main`, `co2-info1`, etc. Main-screen order is Particle Count, CO2, AQI,
 Environment. There are **27 screens**. Information pages have been renumbered after
 the removals and consolidation.
+
+Environment's temperature number, Fahrenheit scale bar, and temperature history
+use SCD41 readings with their own freshness check. Missing or stale SCD41 data
+shows `--`; there is no automatic fallback to Bosch temperature. Environment RH
+and pressure still use the BME680. Raw BME temperature and its paired-temperature/RH
+moisture calculations remain available on the explicitly labeled BME information
+pages. SCD41 temperature is displayed only in the Environment group.
+Sensor calibration offsets have not been changed.
 
 The Environment pressure bar retains the current-pressure marker. A fading cyan
 trail and an arrow indicate rising or falling pressure; a dash means steady.
