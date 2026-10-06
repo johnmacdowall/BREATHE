@@ -1,8 +1,9 @@
 /*
- BREATHE // INSTRUMENT OS 4.4.6 -- 06 October 2026
+ BREATHE // INSTRUMENT OS 4.4.7 -- 06 October 2026
  Gas main title: VoC AIR QUALITY; calibration details remain on gas-info6.
  Brighter cyan, amber and violet ribbons frame IAQ; motion requires a valid reading.
  Text colors +20% then +30%; main ribbons brightened another 30%; T/RH whole numbers.
+ Particle radar remains visible beside its count; six cumulative size totals fill pms-info1.
  CO2 eye moved up 4 px; shared 33 px main numerals for CO2, particle count and VoC.
  Environment units share the numbers' full font size and baseline.
  Environment temperature/history use Si7021; RH is the mean of Si7021 and BME680.
@@ -16,7 +17,7 @@
  Main cycle: Particle Count -> CO2 -> VoC Air Quality (Bosch IAQ) -> Environment.
  Screen IDs (info pages renumbered after removal / consolidation):
    co2-main: eye; co2-info1: SCD41 readings; co2-info2: history.
-   pms-main: total count; pms-info1: mass/counts/size bands; pms-info2: PM2.5 history.
+   pms-main: total count >0.3 um; pms-info1: six cumulative size counts; pms-info2: PM2.5 history.
    gas-main: Bosch IAQ; gas-info1: original chamber/heater animation;
    gas-info2: resistance graph; gas-info3: raw/filter/baseline/ratio/deviation;
    gas-info4: heater status; gas-info5: statistics; gas-info6: IAQ diagnostics;
@@ -1846,9 +1847,19 @@ void particleMain(Adafruit_GFX& d){
   int x=cx+lroundf(c.x*.65f),y=cy+lroundf(c.y*.65f);uint16_t col=mix(DIM,WHITE,glow);
   if(c.kind==0)d.drawPixel(x,y,col);else if(c.kind==1)d.fillCircle(x,y,1,col);else d.drawCircle(x,y,2,col);
  }
- d.fillRect(22,78,196,66,BLACK);value(d,120,89,fresh?pm.counts[0]:NAN,0,&MainNumberFont,WHITE,194);
- center(d,120,134,"PARTICLES / 0.1 L",&SmallFont,CYAN);
- center(d,120,158,">0.3 um",&LabelFont,WHITE);
+ // Clear only the actual text bounds. The previous full-width mask erased
+ // every radar contact to the left and right of the count.
+ auto readout=[&](int y,const char* label,const GFXfont* font,uint16_t color) {
+  d.setFont(font);d.setTextSize(1);int16_t bx,by;uint16_t w,h;
+  d.getTextBounds(label,0,0,&bx,&by,&w,&h);
+  d.fillRect(cx-w/2-3,y-3,w+6,h+6,BLACK);
+  center(d,cx,y,label,font,color);
+ };
+ char number[12];if(fresh)snprintf(number,sizeof(number),"%u",pm.counts[0]);else strcpy(number,"--");
+ readout(89,number,&MainNumberFont,WHITE);
+ readout(134,"PARTICLES / 0.1 L",&SmallFont,CYAN);
+ // The lowest threshold already includes all the larger size thresholds.
+ readout(158,"TOTAL >0.3 um",&LabelFont,WHITE);
  text(d,12,182,fresh?"COUNT SCALE":pmFresh()?"COUNT DATA INVALID":"PMS WAIT / WARMUP",&SmallFont,fresh?DIM:AMBER);
  mainBar(d,fresh?pm.counts[0]:NAN,0,10000,"0","5,000","10,000");
 }
@@ -2411,21 +2422,20 @@ void particleFlow(Adafruit_GFX& d,int y,uint16_t n,int kind) {
 }
 void particleDetails(Adafruit_GFX& d){
  bool fresh=pmFresh(),counts=fresh&&pm.countsOK;
- consoleHeader(d,"PMS // COMBINED",0,2,fresh);
- const char* massLabels[3]={"PM1","PM2.5","PM10"};const float mass[3]={(float)pm.pm1,(float)pm.pm25,(float)pm.pm10};
- for(int i=0;i<3;++i){int x=48+i*72;center(d,x,44,massLabels[i],&SmallFont,CYAN);value(d,x,61,fresh?mass[i]:NAN,0,&NumberFont,WHITE,64);}
- smallNote(d,94,"MASS / ug/m3");rule(d,110);
- const char* size[6]={">0.3",">0.5",">1.0",">2.5",">5.0",">10"};
- text(d,12,116,"um",&SmallFont,DIM);right(d,228,116,"COUNTS / 0.1L",&SmallFont,DIM);
- for(int i=0;i<6;++i){int col=i/3,rowIndex=i%3,x=12+col*112,y=134+rowIndex*17;
-  text(d,x,y,size[i],&SmallFont,CYAN);char number[12];if(counts)snprintf(number,sizeof(number),"%u",pm.counts[i]);else strcpy(number,"--");
-  right(d,x+104,y,number,&SmallFont,WHITE);}
- rule(d,185);
- const char* bandLabels[3]={"0.3-1","1-2.5",">2.5"};
- const float band[3]={counts?(float)(pm.counts[0]-pm.counts[2]):NAN,counts?(float)(pm.counts[2]-pm.counts[3]):NAN,counts?(float)pm.counts[3]:NAN};
- for(int i=0;i<3;++i){int x=48+i*72;center(d,x,191,bandLabels[i],&SmallFont,CYAN);value(d,x,207,band[i],0,&LabelFont,WHITE,65);
-  // Keep the three particle-size animations within their respective columns.
-  if(counts&&band[i]>0){int dx=x-25+(int)((nowMs()/80+i*17)%51);if(i==0)d.drawPixel(dx,229,CYAN);else if(i==1)d.fillCircle(dx,229,1,CYAN);else d.drawCircle(dx,229,2,CYAN);}}
+ // Put status above the six readings rather than over the bottom row.
+ consoleHeader(d,"PMS // COUNTS",0,2,true);
+ const char* status=counts?"CUMULATIVE / 0.1 L":fresh?"COUNT DATA INVALID":
+  nowMs()-pmsStartedMs<PMS_WARMUP_MS?"PMS WARMING / 30 SEC":"PMS WAITING / STALE";
+ smallNote(d,42,status,counts?DIM:AMBER);
+ const char* size[6]={">0.3 um",">0.5 um",">1.0 um",">2.5 um",">5.0 um",">10 um"};
+ d.drawFastVLine(120,60,170,GRID);rule(d,116);rule(d,174);
+ for(int i=0;i<6;++i){int col=i/3,rowIndex=i%3,x=64+col*112,y=61+rowIndex*58;
+  center(d,x,y,size[i],&LabelFont,CYAN);
+  const bool wide=counts&&pm.counts[i]>=10000;
+  value(d,x,y+(wide?23:19),counts?(float)pm.counts[i]:NAN,0,wide?&EnvValueFont:&MainNumberFont,WHITE,100);
+ }
+ // Thresholds overlap: never sum them. PM mass values remain in /status,
+ // and the separate PM2.5 history page retains atmospheric ug/m3.
 }
 
 void environmentDetails(Adafruit_GFX& d) {
@@ -2587,7 +2597,7 @@ String statusJSON() {
  const bool ef=envFresh(), gf=gasFresh(), pf=pmFresh(), cf=co2Fresh(), sf=si7021Fresh();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(3300);
- s="{\"firmware\":\"BREATHE 4.4.6\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.4.7\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -2688,7 +2698,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.4.6</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.4.7</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Gas AQI displays the Bosch IAQ index after run-in and calibration; it is not EPA AQI. Raw gas and bVOC equivalent remain distinct. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -2723,7 +2733,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.4.6");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.4.7");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);

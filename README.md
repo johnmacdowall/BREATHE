@@ -1,7 +1,7 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.6**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.4.7**, with the reviewed screen changes from October 6, 2026.
 Temperature and relative humidity display as whole numbers, including their history
 labels; sensor values and calculations keep full precision. Environment's pressure
 label is **BARO**. Text colors are 30% brighter again after the previous 20% increase
@@ -22,6 +22,12 @@ compact fallback for five-digit readings. The subtle eye animation is retained.
 Environment **F**, **%** and **inHg** use the same font and baseline as their numbers.
 Empty character-side spacing is trimmed to fit full-size units in the existing
 three-row layout. Edge registration marks remain removed.
+
+The particle radar now remains visible beside the main number as well as above
+and below it: only the text itself is masked. The main number is labeled
+**TOTAL >0.3 um**. `pms-info1`, now titled **PMS // COUNTS**, uses a large two-column,
+three-row layout for the six cumulative size thresholds. The former mass-summary
+and three derived size-band panels have been removed from that page.
 
 ## Open in Visual Studio Code
 
@@ -67,7 +73,7 @@ Service pages are excluded from the normal main and sensor-information cycles.
 | Group | Main screen | Information pages, in order |
 | --- | --- | --- |
 | `co2` | Eye with SCD41 ppm | 1: readings; 2: history |
-| `pms` | Total particles above 0.3 um per 0.1 L | 1: combined mass/counts/size bands; 2: PM2.5 history |
+| `pms` | Total particles above 0.3 um per 0.1 L | 1: six large cumulative size counts; 2: PM2.5 history |
 | `gas` | VoC Air Quality (Bosch IAQ) | 1: original chamber/heater animation; 2: resistance graph; 3: raw/filter/baseline/ratio/deviation; 4: heater status; 5: statistics; 6: IAQ diagnostics; 7: IAQ history |
 | `env` | Si7021 temperature, averaged Si7021/BME680 RH, BME680 pressure in inHg | 1: raw BME readings; 2: BME dew point; 3: BME absolute humidity; 4: pressure units; 5: Si7021 temperature history; 6: averaged RH history; 7: pressure history; 8: temperature/RH source comparison |
 | `sys` | Triple-click access only | 1: sensor coverage; 2: timing; 3: health; 4: configuration; 5: light/backlight |
@@ -97,6 +103,20 @@ trail and an arrow indicate rising or falling pressure; a dash means steady.
 A question mark means insufficient recent history. The fit uses up to five minutes
 of readings and needs at least two continuous minutes. Pressure is station pressure,
 without sea-level correction.
+
+The PMS5003 count above 0.3 micrometers is already the cumulative total above
+its smallest reported size threshold, per 0.1 liter of air. Each of the other
+thresholds (0.5, 1.0, 2.5, 5.0 and 10 micrometers) is a subset of that total;
+adding all six would count some particles repeatedly. The six info-page readings
+retain the sensor's cumulative meaning rather than representing disjoint bins.
+
+Particulate AQI uses PM2.5/PM10 **mass concentration** in micrograms per cubic
+meter, with the appropriate averaging method, rather than the summed particle
+counts. BREATHE does not currently calculate a separate particulate AQI. Its
+VoC index remains Bosch IAQ and does not incorporate PMS readings. PM2.5 mass
+remains visible on `pms-info2`; all three mass channels remain in the status JSON.
+References: [Plantower PMS5003 protocol](https://cdn-shop.adafruit.com/product-files/3686/plantower-pms5003-manual_v2-3.pdf)
+and [EPA AQI technical guidance](https://document.airnow.gov/technical-assistance-document-for-the-reporting-of-daily-air-quailty.pdf).
 
 The VoC Air Quality screen uses Bosch's gas-based **IAQ** index. BSEC2 calculations are enabled;
 the current number is shown only after the existing run-in and calibration gates.
