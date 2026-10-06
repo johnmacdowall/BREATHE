@@ -1,0 +1,14 @@
+.pio/
+.pio-*/
+include/secrets.h
+secrets.h
+.env
+.env.*
+*.bin
+*.elf
+*.map
+*.log
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
