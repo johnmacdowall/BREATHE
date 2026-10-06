@@ -1,7 +1,9 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.0**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.4.1**, with the reviewed screen changes from October 6, 2026.
+The CO2 eye is smaller with space above its caption; edge registration marks have
+been removed from all screens. The subtle eye animation is retained.
 
 ## Open in Visual Studio Code
 

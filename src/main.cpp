@@ -1,5 +1,6 @@
 /*
- BREATHE // INSTRUMENT OS 4.4.0 -- 06 October 2026
+ BREATHE // INSTRUMENT OS 4.4.1 -- 06 October 2026
+ Smaller CO2 eye with caption clearance; registration frame removed on every screen.
  Four main screens; sensor info by long press; service pages by triple-click only.
  Short press: next in current layer. Hold: information / return. Triple: service / return.
  Gas info reduced 13 -> 7; PMS information merged; CO2 source page removed.
@@ -1480,10 +1481,8 @@ void row(Adafruit_GFX& d,int y,const char* name,const char* v,uint16_t c=CYAN) {
 }
 void rule(Adafruit_GFX& d,int y,uint16_t c=GRID) { d.drawFastHLine(12,y,216,c); }
 void furniture(Adafruit_GFX& d) {
+ // All screens share a clear background, without the old edge registration frame.
  d.fillScreen(BLACK);
- for(int x: {4,235}) { d.drawFastVLine(x,8,224,GRID); }
- d.drawFastHLine(4,8,15,DIM); d.drawFastHLine(221,8,15,DIM);
- d.drawFastHLine(4,232,15,DIM); d.drawFastHLine(221,232,15,DIM);
 }
 void smallNote(Adafruit_GFX& d,int y,const char* s,uint16_t c=DIM) { center(d,120,y,s,&SmallFont,c); }
 void consoleHeader(Adafruit_GFX& d,const char* s,int index,int total,bool fresh) {
@@ -1570,12 +1569,14 @@ void particleMain(Adafruit_GFX& d){
 void co2Main(Adafruit_GFX& d){
  mainHeader(d,"CO2");bool fresh=co2Fresh();float amount=fresh?clipf((co2.ppm-400)/1600,0,1):0;
  float motion=fresh?1.3f*sinf((nowMs()%8000)*6.2831853f/8000):0;
- segments(d,120,111,69,DIM);float r=58-amount*7+motion;
+ // The 60 px outer radius ends at y=167: 14 clear rows before the caption at y=182.
+ constexpr int cx=120,cy=107,outerRadius=60,spokeRadius=57;
+ segments(d,cx,cy,outerRadius,DIM);float r=54-amount*5+motion;
  for(int j=0;j<6;++j){float a=j*60+15,q=a*.01745329252f;
-  arc(d,120,111,(int)r,a,a+42,CYAN,2);
-  d.drawLine(120+lroundf(66*cosf(q)),111+lroundf(66*sinf(q)),120+lroundf(r*cosf(q+.12f)),111+lroundf(r*sinf(q+.12f)),DIM);}
- value(d,120,94,fresh?co2.ppm:NAN,0,&Co2Font,WHITE,92);
- center(d,120,142,"ppm",&LabelFont,CYAN);
+  arc(d,cx,cy,(int)r,a,a+42,CYAN,2);
+  d.drawLine(cx+lroundf(spokeRadius*cosf(q)),cy+lroundf(spokeRadius*sinf(q)),cx+lroundf(r*cosf(q+.12f)),cy+lroundf(r*sinf(q+.12f)),DIM);}
+ value(d,cx,89,fresh?co2.ppm:NAN,0,&Co2Font,WHITE,92);
+ center(d,cx,132,"ppm",&LabelFont,CYAN);
  text(d,12,182,fresh?"CONCENTRATION / ppm":"SCD41 WAIT / STALE",&SmallFont,fresh?DIM:AMBER);
  mainBar(d,fresh?co2.ppm:NAN,400,5000,"400","2,700","5,000");
 }
@@ -2236,9 +2237,6 @@ void drawFrame() {
      int rightEdge=clipi(120+reach,0,240);d.drawFastHLine(0,y,left,BLACK);
      d.drawFastHLine(rightEdge,y,240-rightEdge,BLACK); }
    }
-  } else if(n-transitionAt<170) {
-   // Short side-rail accent, never an artificial signal transition.
-   int y=8+(int)((n-transitionAt)*224/170);d.drawFastVLine(4,8,y-8,CYAN);
   }
  }
  tft.drawRGBBitmap(0,0,canvas->getBuffer(),240,240);
@@ -2253,7 +2251,7 @@ String statusJSON() {
  const bool ef=envFresh(), gf=gasFresh(), pf=pmFresh(), cf=co2Fresh();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(2500);
- s="{\"firmware\":\"BREATHE 4.4.0\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.4.1\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -2343,7 +2341,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.4.0</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.4.1</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Gas AQI displays the Bosch IAQ index after run-in and calibration; it is not EPA AQI. Raw gas and bVOC equivalent remain distinct. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -2378,7 +2376,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.4.0");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.4.1");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);
