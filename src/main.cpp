@@ -1,5 +1,7 @@
 /*
- BREATHE // INSTRUMENT OS 4.4.2 -- 06 October 2026
+ BREATHE // INSTRUMENT OS 4.4.3 -- 06 October 2026
+ Gas main title: GAS AIR QUALITY; calibration details remain on gas-info6.
+ Subtle gas ribbons frame the main IAQ number; motion requires a valid reading.
  Environment temperature and its history use SCD41.
  Smaller CO2 eye with caption clearance; registration frame removed on every screen.
  Four main screens; sensor info by long press; service pages by triple-click only.
@@ -7,7 +9,7 @@
  Gas info reduced 13 -> 7; PMS information merged; CO2 source page removed.
  Pressure bar: five-minute fitted direction, fading trail, arrow/steady indicator.
  A question mark means insufficient recent pressure history (minimum two minutes).
- Main cycle: Particle Count -> CO2 -> AQI (Bosch IAQ) -> Environment.
+ Main cycle: Particle Count -> CO2 -> Gas Air Quality (Bosch IAQ) -> Environment.
  Screen IDs (info pages renumbered after removal / consolidation):
    co2-main: eye; co2-info1: SCD41 readings; co2-info2: history.
    pms-main: total count; pms-info1: mass/counts/size bands; pms-info2: PM2.5 history.
@@ -495,7 +497,7 @@ void serviceCO2() {
 
 // ---------------------- Navigation and button recognizer ------------------
 enum Page { AIR_SAMPLE,EYE,CHEMISTRY,ENVIRONMENT,PAGE_COUNT };
-const char* PAGE_NAMES[PAGE_COUNT]={"PARTICLE COUNT","CO2","AQI","ENVIRONMENT"};
+const char* PAGE_NAMES[PAGE_COUNT]={"PARTICLE COUNT","CO2","GAS AIR QUALITY","ENVIRONMENT"};
 const char* PAGE_IDS[PAGE_COUNT]={"pms","co2","gas","env"};
 Page page=AIR_SAMPLE;
 bool detail=false,serviceMode=false,autoTour=START_AUTO_TOUR,bootActive=true;
@@ -1582,18 +1584,36 @@ void co2Main(Adafruit_GFX& d){
  text(d,12,182,fresh?"CONCENTRATION / ppm":"SCD41 WAIT / STALE",&SmallFont,fresh?DIM:AMBER);
  mainBar(d,fresh?co2.ppm:NAN,400,5000,"400","2,700","5,000");
 }
+void gasMainRibbons(Adafruit_GFX& d,bool live){
+ // Decorative vapor contours, not sampled waveforms or a particle-count display.
+ // Keep every line outside the numeric field and the scale/caption below it.
+ const float phase=live?(nowMs()%14000)*6.2831853f/14000.0f:0;
+ for(int band=0;band<2;++band)for(int strand=0;strand<3;++strand){
+  const int base=(band?147:54)+strand*9;
+  int px=18,py=base;
+  for(int x=21;x<=222;x+=3){
+   const float u=(x-18)/204.0f,envelope=4*u*(1-u);
+   const float wave=3.5f*sinf(u*6.2831853f+phase+strand*.45f+band*1.7f)
+    +1.5f*sinf(u*12.566371f-phase+strand*.7f);
+   const int y=base+lroundf(envelope*wave);
+   const float glow=(strand==1?.40f:.24f)*envelope;
+   d.drawLine(px,py,x,y,mix(BLACK,live?CYAN:DIM,live?glow:glow*.40f));
+   px=x;py=y;
+  }
+ }
+}
 void gasMain(Adafruit_GFX& d){
- mainHeader(d,"AQI");center(d,120,47,"VOC / BOSCH IAQ",&LabelFont,CYAN);
- value(d,120,83,iaqReady()?iaq.index:NAN,0,&BigFont,WHITE,196);
- char status[40];
- if(!iaq.initialized)snprintf(status,sizeof(status),"BSEC INITIALIZING / FAULT");
- else if(!iaqFresh())snprintf(status,sizeof(status),"WAITING FOR GAS SAMPLE");
- else if(!iaq.stabilized||!iaq.runIn)snprintf(status,sizeof(status),"SENSOR RUN-IN");
- else if(!iaq.accuracy)snprintf(status,sizeof(status),"CALIBRATING");
- else snprintf(status,sizeof(status),"ACCURACY %u / 3",iaq.accuracy);
- smallNote(d,153,status,iaqReady()?CYAN:AMBER);
+ mainHeader(d,"GAS AIR QUALITY");
+ const bool ready=iaqReady();gasMainRibbons(d,ready);
+ value(d,120,83,ready?iaq.index:NAN,0,&BigFont,WHITE,196);
+ // Calibration levels belong to the information page. Explain unavailable data only.
+ if(!ready) {
+  const char* status=!iaq.initialized?"SENSOR INITIALIZING / FAULT":
+   !iaqFresh()?"WAITING FOR GAS SAMPLE":"WAITING FOR VALID READING";
+  d.fillRect(12,149,216,20,BLACK);smallNote(d,153,status,AMBER);
+ }
  text(d,12,182,"INDOOR GAS INDEX",&SmallFont,DIM);
- mainBar(d,iaqReady()?iaq.index:NAN,0,500,"0","250","500",true);
+ mainBar(d,ready?iaq.index:NAN,0,500,"0","250","500",true);
 }
 struct PressureTrend {bool ready=false;int direction=0;float fiveMinuteChange=NAN;};
 PressureTrend pressureTrend(){
@@ -2255,7 +2275,7 @@ String statusJSON() {
  const bool ef=envFresh(), gf=gasFresh(), pf=pmFresh(), cf=co2Fresh();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(2500);
- s="{\"firmware\":\"BREATHE 4.4.2\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.4.3\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -2345,7 +2365,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.4.2</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.4.3</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Gas AQI displays the Bosch IAQ index after run-in and calibration; it is not EPA AQI. Raw gas and bVOC equivalent remain distinct. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -2380,7 +2400,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.4.2");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.4.3");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);

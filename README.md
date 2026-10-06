@@ -1,7 +1,12 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.2**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.4.3**, with the reviewed screen changes from October 6, 2026.
+The gas main screen is titled **GAS AIR QUALITY**, without the Bosch/VOC subtitle
+or calibration status. Calibration details remain on `gas-info6`.
+Faint cyan gas ribbons drift around the main number on a 14-second cycle. They are
+decorative, leave the number and scale clear, and become dim and stationary while
+the reading is unavailable. The original long-press chamber animation is retained.
 Environment temperature and its history now use the SCD41.
 The CO2 eye is smaller with space above its caption; edge registration marks have
 been removed from all screens. The subtle eye animation is retained.
@@ -51,11 +56,11 @@ Service pages are excluded from the normal main and sensor-information cycles.
 | --- | --- | --- |
 | `co2` | Eye with SCD41 ppm | 1: readings; 2: history |
 | `pms` | Total particles above 0.3 um per 0.1 L | 1: combined mass/counts/size bands; 2: PM2.5 history |
-| `gas` | Bosch IAQ | 1: original chamber/heater animation; 2: resistance graph; 3: raw/filter/baseline/ratio/deviation; 4: heater status; 5: statistics; 6: IAQ diagnostics; 7: IAQ history |
+| `gas` | Gas Air Quality (Bosch IAQ) | 1: original chamber/heater animation; 2: resistance graph; 3: raw/filter/baseline/ratio/deviation; 4: heater status; 5: statistics; 6: IAQ diagnostics; 7: IAQ history |
 | `env` | SCD41 temperature, BME680 RH and pressure in inHg | 1: raw BME readings; 2: BME dew point; 3: BME absolute humidity; 4: pressure units; 5: SCD41 temperature history; 6: RH history; 7: pressure history |
 | `sys` | Triple-click access only | 1: sensor coverage; 2: timing; 3: health; 4: configuration; 5: light/backlight |
 
-IDs use `co2-main`, `co2-info1`, etc. Main-screen order is Particle Count, CO2, AQI,
+IDs use `co2-main`, `co2-info1`, etc. Main-screen order is Particle Count, CO2, Gas Air Quality,
 Environment. There are **27 screens**. Information pages have been renumbered after
 the removals and consolidation.
 
@@ -73,7 +78,7 @@ A question mark means insufficient recent history. The fit uses up to five minut
 of readings and needs at least two continuous minutes. Pressure is station pressure,
 without sea-level correction.
 
-The AQI screen uses Bosch's gas-based **IAQ** index. BSEC2 calculations are enabled;
+The Gas Air Quality screen uses Bosch's gas-based **IAQ** index. BSEC2 calculations are enabled;
 the current number is shown only after the existing run-in and calibration gates.
 The original gas chamber/heater animation remains unchanged. Calibration state is
 saved in NVS; screen histories are RAM-only.
