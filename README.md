@@ -1,14 +1,14 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.5**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.4.6**, with the reviewed screen changes from October 6, 2026.
 Temperature and relative humidity display as whole numbers, including their history
 labels; sensor values and calculations keep full precision. Environment's pressure
 label is **BARO**. Text colors are 30% brighter again after the previous 20% increase
 (1.20 x 1.30 = 1.56 times the original channels), capped at full intensity.
 The gas main screen is titled **VoC AIR QUALITY**, without the Bosch/VOC subtitle
 or calibration status. Calibration details remain on `gas-info6`.
-Cyan, amber and violet gas ribbons are another 30% brighter and drift around the
+Cyan, amber and violet gas ribbons are another 30% brighter than v4.4.5 and drift around the
 main number on a 14-second cycle. The colors suggest a mixed VOC response; they do
 not represent individually measured gases. The ribbons are decorative, leave the
 number and scale clear, and become dim and stationary while
@@ -16,8 +16,12 @@ the reading is unavailable. The original long-press chamber animation is retaine
 Environment temperature and its history use the **Si7021**. Environment RH and
 its history show the arithmetic mean of **Si7021 RH and BME680 RH**. The new
 `env-info8` page shows the source readings and average; Service coverage includes Si7021.
-The CO2 eye is smaller with space above its caption; edge registration marks have
-been removed from all screens. The subtle eye animation is retained.
+The CO2 eye is moved up four pixels to center it between its title and lower caption.
+CO2, particle count and VoC main numbers share a 33-pixel-high font; CO2 uses a
+compact fallback for five-digit readings. The subtle eye animation is retained.
+Environment **F**, **%** and **inHg** use the same font and baseline as their numbers.
+Empty character-side spacing is trimmed to fit full-size units in the existing
+three-row layout. Edge registration marks remain removed.
 
 ## Open in Visual Studio Code
 
@@ -114,8 +118,8 @@ saved in NVS; screen histories are RAM-only.
 | PMS UART receive | D7 / GPIO20 |
 | PMS UART transmit (no commands currently sent) | D6 / GPIO21 |
 
-Connect Si7021 **VCC to 3.3V**, **GND to GND**, **SDA to D4/GPIO6**, and
-**SCL to D5/GPIO7**. Its I2C address is **0x40**. Place it away from the Bosch
+Connect Si7021 **VIN to the 3.3V bus**, **GND to GND**, **SDA to D4/GPIO6**, and
+**SCL to D5/GPIO7**. Leave the breakout's **3Vo output unconnected**. Its I2C address is **0x40**. Place it away from the Bosch
 heater, display and processor heat when evaluating room temperature.
 
 The PMS connection names in `src/main.cpp` preserve the existing working PIM477
