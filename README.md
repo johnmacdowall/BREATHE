@@ -1,8 +1,8 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.5.0**, with Home Assistant MQTT discovery and
-the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.5.1**, with the Environment instrument-panel
+redesign from October 7, 2026 and Home Assistant MQTT discovery.
 The optional MQTT connection automatically registers **92 entities** under one
 BREATHE device and publishes a full snapshot every ten seconds. Telemetry uses
 the `air` topic prefix; discovery uses `homeassistant`. Broker credentials stay in
@@ -24,12 +24,21 @@ its history show the arithmetic mean of **Si7021 RH and BME680 RH**. The new
 The CO2 eye is moved up four pixels to center it between its title and lower caption.
 CO2, Particle AQI, particle count and VoC numbers share a 33-pixel-high font; CO2 uses a
 compact fallback for five-digit readings. The subtle eye animation is retained.
-Environment uses one consistent sans-serif font family, with a clear title,
-aligned labels and reading columns. **F**, **%** and **inHg** use the same size,
-font and baseline as their numbers. The three-row layout, all readings, and the
-bottom bars with their pressure trend are preserved. The embedded Environment
-fonts are covered by [FONT-LICENSE.txt](FONT-LICENSE.txt).
+Environment is now split into three equal columns: a thermometer, humidity ring,
+and barometer dial. The numeric readings sit beneath the gauges, with **F**,
+**%** and **inHg** on a second line in the same font and size as the numbers.
+The established sans-serif family and cyan/white palette are retained. Small
+highlights brighten gently on a four-second cycle while their readings are valid;
+gauge positions follow measurements, with no artificial needle or level movement.
+The old bottom scale bars are replaced by a **24-hour pressure histogram**.
+The embedded Environment fonts are covered by [FONT-LICENSE.txt](FONT-LICENSE.txt).
 Edge registration marks remain removed.
+
+![Environment screen rendered from firmware](docs/environment-preview.gif)
+
+Preview uses illustrative readings and a simulated day of pressure data through
+the actual firmware renderer. [Still preview](docs/environment-preview.png).
+The physical device starts with an empty day history after uploading or rebooting.
 
 **PARTICLE AQI** is now the main radar screen. It shows a **LIVE ESTIMATE** from
 PMS5003 mass readings, a category label, and a six-color EPA scale from 0 to 500.
@@ -92,8 +101,8 @@ IDs use `co2-main`, `co2-info1`, etc. Main-screen order is Particle AQI, CO2, Vo
 Environment. There are **29 screens**. Information pages have been renumbered after
 the removals and consolidation.
 
-Environment's temperature number, Fahrenheit scale bar, and temperature history
-use only the Si7021. RH, its scale bar and history use `(Si7021 RH + BME680 RH) / 2`,
+Environment's temperature number, thermometer gauge, and temperature history
+use only the Si7021. RH, its ring gauge and history use `(Si7021 RH + BME680 RH) / 2`,
 calculated before display rounding. Both humidity readings must be fresh (under
 six seconds old). A missing, failed or stale Si7021 shows `--` for temperature and
 averaged RH; missing/stale BME data shows `--` for averaged RH and pressure.
@@ -110,13 +119,26 @@ Raw BME temperature and its paired-temperature/RH moisture calculations remain o
 the explicitly labeled BME information pages. SCD41 continues to supply CO2.
 Sensor calibration offsets have not been changed.
 
-The Environment pressure bar retains the current-pressure marker. A fading cyan
-trail and an arrow indicate rising or falling pressure; a dash means steady.
-A question mark means insufficient recent history. The fit uses up to five minutes
-of readings and needs at least two continuous minutes. Pressure is station pressure,
-without sea-level correction.
-The same fitted trend is exported as `rising`, `falling` or `steady`, along with
-the fitted five-minute pressure change. Insufficient history produces `null`.
+The Environment instruments use fixed visual ranges: 40-100 F, 0-100% RH and
+28-31 inHg. Values outside a gauge's range remain visible numerically while the
+gauge stops at its endpoint. The barometer needle indicates current pressure.
+An arrow beside the histogram title indicates the existing short-term pressure
+trend; a dash means steady and no symbol means insufficient recent history.
+The fit uses up to five minutes and needs at least two continuous minutes.
+Pressure is station pressure without sea-level correction. The same fitted trend
+is exported to MQTT as `rising`, `falling` or `steady`, along with the fitted
+five-minute pressure change. Insufficient trend history produces `null`.
+
+The bottom histogram covers a rolling 24 hours with half-hour mean pressure
+columns. Its expanded vertical axis is labeled in inHg and automatically follows
+the recorded pressure range, so small weather changes remain visible. Older bars
+are dimmer; the current bar has a gentle highlight. Empty time buckets stay blank
+and the newest bucket is an incomplete average until its half hour ends.
+49 RAM buckets retain both partial ends of the 24-hour window. This uses uptime,
+works without Wi-Fi or a clock server, and starts collecting after boot; it does
+not reconstruct data from before an upload, restart or power outage. A bucket's
+mean uses only valid samples received during that interval. Existing short-term
+pressure info pages and the 92 Home Assistant entities remain available.
 
 The PMS5003 count above 0.3 micrometers is already the cumulative total above
 its smallest reported size threshold, per 0.1 liter of air. Each of the other

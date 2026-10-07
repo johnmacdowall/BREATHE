@@ -1,5 +1,5 @@
 /*
- BREATHE // INSTRUMENT OS 4.5.0 -- 06 October 2026
+ BREATHE // INSTRUMENT OS 4.5.1 -- 07 October 2026
  Home Assistant MQTT discovery and 10-second telemetry; local credentials only.
  Gas main title: VoC AIR QUALITY; calibration details remain on gas-info6.
  Brighter cyan, amber and violet ribbons frame IAQ; motion requires a valid reading.
@@ -7,15 +7,15 @@
  Particle AQI main: live estimate from the higher EPA PM2.5/PM10 subindex.
  Total-count radar moved to pms-info3; six size totals and PM2.5 history retain their IDs.
  CO2 eye moved up 4 px; shared 33 px main numerals for CO2, particle count and VoC.
- Environment: one sans font family, aligned columns and full-size units; bottom bars retained.
+ Environment: three gauges with full-size units above a 24-hour pressure histogram.
  Environment temperature/history use Si7021; RH is the mean of Si7021 and BME680.
  Si7021 heater off, CRC checked, asynchronous 2-second sampling on shared I2C 0x40.
  Smaller CO2 eye with caption clearance; registration frame removed on every screen.
  Four main screens; sensor info by long press; service pages by triple-click only.
  Short press: next in current layer. Hold: information / return. Triple: service / return.
  Gas info reduced 13 -> 7; PMS information merged; CO2 source page removed.
- Pressure bar: five-minute fitted direction, fading trail, arrow/steady indicator.
- A question mark means insufficient recent pressure history (minimum two minutes).
+ Environment trend arrow: five-minute fitted direction; at least two minutes of history.
+ Day histogram: cyan columns with an expanded pressure axis in inHg.
  Main cycle: Particle AQI -> CO2 -> VoC Air Quality (Bosch IAQ) -> Environment.
  Screen IDs (info pages renumbered after removal / consolidation):
    co2-main: eye; co2-info1: SCD41 readings; co2-info2: history.
@@ -39,6 +39,7 @@
  Raw gas filtering and the local reference remain separate engineering tools.
  Missing/stale/warming channels show no current number or position marker.
  Particle radar/contact positions and gas/heat animation remain schematics.
+ Pressure histogram: half-hour averages, 24-hour rolling window, gaps left empty.
  Histories are RAM-only; only the Bosch calibration state survives reboot.
  Existing wiring, light control, PMS and SCD41 retained.
  Wi-Fi credentials are loaded from local include/secrets.h (excluded from Git).
@@ -70,7 +71,7 @@
 constexpr char WIFI_SSID[] = "";
 constexpr char WIFI_PASSWORD[] = "";
 #endif
-constexpr char FIRMWARE_VERSION[]="4.5.0";
+constexpr char FIRMWARE_VERSION[]="4.5.1";
 constexpr int BUTTON_GPIO = 3;     // XIAO D1 / GPIO3 -> pushbutton -> GND.
 constexpr bool ENABLE_PMS = true; // Absent PMS simply stays offline.
 constexpr int PMS_RX_GPIO = 20;    // D7 <- PIM477 pin labelled RX (sensor TX).
@@ -139,6 +140,27 @@ Ring<GasSample,100> gasHistory;
 Ring<ScalarSample,180> pmHistory, co2History, temperatureHistory;
 // Both humidity sources can update independently (Si7021 ~2s, BME ~3s).
 Ring<ScalarSample,300> humidityHistory;
+
+// A separate day-scale history preserves the original short info-page graphs.
+// 49 half-hour buckets cover both partial ends of a rolling 24-hour window.
+// Uptime timestamps need no network clock. Unobserved buckets remain empty;
+// history deliberately restarts on reboot, rather than inventing missing data.
+constexpr uint64_t PRESSURE_BUCKET_MS=30ULL*60*1000, PRESSURE_DAY_MS=24ULL*60*60*1000;
+struct PressureBucket {uint64_t id=UINT64_MAX;float meanPa=NAN;uint32_t samples=0;};
+struct PressureDayHistory {
+ PressureBucket buckets[49];uint64_t lastSample=UINT64_MAX;
+ void clear(){for(auto& b:buckets)b=PressureBucket();lastSample=UINT64_MAX;}
+ void record(uint64_t at,float pa){
+  if(!isfinite(pa)||pa<30000||pa>110000||(lastSample!=UINT64_MAX&&at<=lastSample))return;
+  const uint64_t id=at/PRESSURE_BUCKET_MS;PressureBucket& b=buckets[id%49];
+  if(b.id!=id){b=PressureBucket();b.id=id;}
+  ++b.samples;b.meanPa=b.samples==1?pa:b.meanPa+(pa-b.meanPa)/b.samples;
+  lastSample=at;
+ }
+ const PressureBucket* get(uint64_t id)const{
+  const PressureBucket& b=buckets[id%49];return b.id==id&&b.samples?&b:nullptr;
+ }
+} pressureDay;
 
 struct Environment {
  bool present=false, configured=false, have=false, pending=false;
@@ -398,6 +420,7 @@ void boschData(const bme68xData data,const bsecOutputs outputs,const Bsec2 insta
  if(ok) {
   env.t=t;env.rh=h;env.p=p;env.ms=at;env.have=true;env.consecutiveFails=0;++env.good;
   EnvSample sample;sample.ms=at;sample.t=t;sample.rh=h;sample.p=p;envHistory.push(sample);
+  pressureDay.record(at,p);
  } else {++env.failed;env.have=false;}
  env.gas=env.gasAccepted?r:NAN;
  if(env.gasAccepted) {
@@ -1757,7 +1780,7 @@ const GFXglyph EnvValueFontGlyphs[] PROGMEM={
  {883,16,20,18,0,-20},
 };
 const GFXfont EnvValueFont PROGMEM={(uint8_t*)EnvValueFontBits,(GFXglyph*)EnvValueFontGlyphs,32,110,39};
-// Environment typography: one regular sans family at four intentional sizes.
+// Environment typography: a consistent regular sans family.
 // Rasterized from DejaVu Sans; see FONT-LICENSE.txt.
 const uint8_t EnvironmentTitleFontBits[] PROGMEM={
  48,195,12,48,195,12,48,0,12,48,108,217,179,102,192,0,0,0,0,0,0,0,6,64,
@@ -2505,6 +2528,226 @@ const GFXglyph EnvironmentSmallFontGlyphs[] PROGMEM={
  {837,10,6,10,0,-6},
 };
 const GFXfont EnvironmentSmallFont PROGMEM={(uint8_t*)EnvironmentSmallFontBits,(GFXglyph*)EnvironmentSmallFontGlyphs,32,126,17};
+const uint8_t EnvironmentGaugeFontBits[] PROGMEM={
+ 24,24,24,24,24,24,24,24,24,24,24,24,24,0,0,0,24,24,24,51,12,195,48,204,
+ 51,12,195,48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,198,0,24,192,
+ 6,48,0,198,0,24,192,63,255,7,255,224,24,192,3,24,0,99,0,12,96,31,255,131,
+ 255,240,12,96,1,140,0,97,0,12,96,1,140,0,2,0,8,0,32,3,240,31,224,233,
+ 131,32,12,128,50,0,232,3,240,7,240,7,224,9,192,35,0,140,2,48,137,131,254,7,
+ 224,2,0,8,0,32,0,128,30,3,1,248,16,12,193,128,194,8,6,24,192,48,196,1,
+ 132,96,6,102,0,63,48,0,243,30,0,25,248,1,140,192,12,194,0,198,24,6,48,192,
+ 97,132,3,6,96,48,63,1,128,240,7,192,7,240,3,8,3,128,1,128,0,224,0,48,
+ 0,28,0,31,0,29,193,140,112,198,24,199,14,99,131,240,192,240,96,56,60,126,15,251,
+ 1,241,192,48,195,12,48,195,0,0,0,0,0,0,0,0,0,0,4,12,12,24,24,24,
+ 48,48,48,48,48,48,48,48,48,48,48,24,24,24,12,12,4,48,48,24,24,24,12,12,
+ 12,12,12,12,12,12,12,12,12,12,12,24,24,24,48,48,4,0,129,17,50,99,248,28,
+ 3,129,252,100,200,136,16,2,0,0,0,0,0,0,0,0,0,0,0,0,192,0,24,0,
+ 3,0,0,96,0,12,0,1,128,0,48,1,255,248,63,255,0,24,0,3,0,0,96,0,
+ 12,0,1,128,0,48,0,6,0,24,48,97,131,6,0,126,126,0,0,0,0,0,0,56,
+ 112,224,3,6,6,6,6,12,12,12,24,24,24,24,48,48,48,48,96,96,96,192,192,7,
+ 128,127,1,206,14,24,48,112,192,195,3,28,12,112,49,192,199,3,28,12,48,48,192,195,
+ 7,14,24,28,224,127,0,120,0,15,0,252,3,48,0,192,3,0,12,0,48,0,192,3,
+ 0,12,0,48,0,192,3,0,12,0,48,0,192,3,0,127,193,255,0,31,128,255,3,14,
+ 8,24,0,96,1,128,6,0,24,0,224,7,0,24,0,224,7,0,56,1,192,6,0,56,
+ 0,255,195,255,0,31,128,255,3,14,0,24,0,112,1,192,6,0,56,15,192,63,0,14,
+ 0,28,0,48,0,192,3,0,28,32,224,255,1,248,0,1,192,7,0,60,0,176,6,192,
+ 51,0,204,6,48,24,192,195,3,12,24,48,127,241,255,192,12,0,48,0,192,3,0,12,
+ 0,63,224,255,131,0,12,0,48,0,192,3,248,15,240,48,224,1,128,7,0,12,0,48,
+ 0,192,7,0,24,32,224,255,1,248,0,3,192,63,129,194,6,0,56,0,192,3,0,13,
+ 240,63,225,241,195,131,12,12,48,48,192,195,3,14,12,28,112,63,128,120,0,63,240,255,
+ 192,6,0,24,0,224,3,0,12,0,112,1,192,6,0,24,0,224,3,0,12,0,112,1,
+ 128,6,0,56,0,192,0,15,128,127,131,142,12,28,48,48,192,195,7,6,56,15,192,127,
+ 3,142,12,12,48,49,192,195,3,12,12,56,240,127,128,248,0,15,128,127,3,142,12,24,
+ 112,113,192,199,3,28,28,48,112,227,193,255,3,204,0,48,1,192,6,0,56,49,192,254,
+ 1,240,0,24,24,24,0,0,0,0,0,0,0,24,24,24,24,24,24,0,0,0,0,0,
+ 0,0,24,24,24,48,48,48,0,1,0,0,224,0,252,0,126,0,62,0,63,0,15,128,
+ 1,224,0,31,128,0,124,0,3,240,0,31,128,0,112,0,2,0,0,0,63,255,7,255,
+ 224,0,0,0,0,0,0,0,127,254,15,255,192,0,0,0,0,0,0,0,0,0,0,0,
+ 0,48,0,7,128,0,124,0,3,240,0,31,128,0,126,0,3,192,0,120,0,63,0,31,
+ 0,31,128,15,128,3,192,0,96,0,0,0,0,15,3,248,49,192,12,0,192,12,1,192,
+ 24,3,0,112,14,0,224,12,0,192,0,0,0,14,0,224,14,0,0,252,0,15,252,0,
+ 120,56,3,128,48,28,0,96,96,0,195,7,51,12,63,196,33,207,16,134,28,70,16,49,
+ 24,192,196,97,3,48,134,28,194,28,246,12,63,240,48,123,128,96,0,1,192,0,3,128,
+ 32,7,131,128,15,252,0,15,192,0,3,128,7,0,30,0,62,0,108,1,216,3,24,6,
+ 48,28,96,48,224,96,193,193,131,255,135,255,12,6,48,14,96,12,192,27,128,56,63,192,
+ 127,224,193,193,129,195,3,134,7,12,14,24,56,63,224,127,192,192,193,128,195,1,134,3,
+ 12,6,24,12,48,56,127,224,255,128,3,240,31,240,120,112,192,99,128,6,0,12,0,56,
+ 0,112,0,224,1,192,3,128,3,0,6,0,14,0,12,6,30,28,31,240,15,192,63,224,
+ 31,252,12,15,6,3,131,0,225,128,48,192,24,96,14,48,7,24,3,140,1,198,0,227,
+ 0,97,128,48,192,56,96,56,48,60,31,252,15,248,0,63,248,255,227,0,12,0,48,0,
+ 192,3,0,12,0,63,240,255,195,0,12,0,48,0,192,3,0,12,0,48,0,255,227,255,
+ 128,63,241,255,140,0,96,3,0,24,0,192,6,0,63,225,255,12,0,96,3,0,24,0,
+ 192,6,0,48,1,128,12,0,3,240,7,254,7,131,131,0,195,128,1,128,0,192,0,224,
+ 0,112,0,56,63,28,31,142,0,195,0,97,128,48,224,24,48,12,30,14,7,255,0,254,
+ 0,48,12,24,6,12,3,6,1,131,0,193,128,96,192,48,96,24,63,254,31,255,12,3,
+ 6,1,131,0,193,128,96,192,48,96,24,48,12,24,6,12,3,0,48,96,193,131,6,12,
+ 24,48,96,193,131,6,12,24,48,96,192,12,12,12,12,12,12,12,12,12,12,12,12,12,
+ 12,12,12,12,12,12,28,28,24,248,240,48,28,96,112,193,193,135,3,28,6,112,12,192,
+ 31,128,62,0,124,0,252,1,156,3,56,6,56,12,56,24,56,48,56,96,48,192,112,48,
+ 1,128,12,0,96,3,0,24,0,192,6,0,48,1,128,12,0,96,3,0,24,0,192,6,
+ 0,48,1,255,143,252,60,3,135,128,240,240,30,31,3,195,96,248,108,27,12,195,97,152,
+ 204,51,25,134,51,48,198,198,24,248,195,15,24,97,195,12,56,97,128,12,48,1,134,0,
+ 48,192,6,0,56,12,60,12,60,12,62,12,54,12,55,12,51,12,51,12,49,140,49,140,
+ 49,204,48,204,48,236,48,108,48,124,48,60,48,60,48,28,48,28,3,224,7,252,7,135,
+ 3,1,195,128,97,128,56,192,28,224,6,112,3,56,1,156,0,206,0,99,0,113,128,56,
+ 224,24,48,28,30,28,7,252,0,248,0,63,192,255,195,7,12,14,48,56,192,227,3,140,
+ 14,48,112,255,195,252,12,0,48,0,192,3,0,12,0,48,0,192,3,0,0,3,224,7,
+ 252,7,135,3,1,195,128,97,128,56,192,28,224,6,112,3,56,1,156,0,206,0,99,0,
+ 113,128,56,224,24,48,28,30,28,7,252,0,252,0,7,0,1,192,0,96,63,192,127,192,
+ 193,193,129,131,3,6,6,12,12,24,24,48,112,127,192,255,1,135,3,7,6,6,12,14,
+ 24,12,48,24,96,56,192,48,15,192,127,195,135,12,0,112,1,192,3,0,14,0,63,0,
+ 63,0,63,0,28,0,48,0,192,3,0,12,112,241,255,129,252,0,127,253,255,240,48,0,
+ 192,3,0,12,0,48,0,192,3,0,12,0,48,0,192,3,0,12,0,48,0,192,3,0,
+ 12,0,48,0,48,12,48,12,48,12,48,12,48,12,48,12,48,12,48,12,48,12,48,12,
+ 48,12,48,12,48,12,48,12,48,12,56,28,28,56,15,240,7,224,224,14,192,25,128,51,
+ 128,227,1,134,3,12,14,28,24,24,48,48,224,113,128,99,0,206,1,216,1,176,3,224,
+ 7,128,7,0,14,0,96,112,25,129,224,230,7,131,156,30,12,48,120,48,195,96,195,12,
+ 199,14,51,28,56,204,96,98,49,129,152,70,6,97,184,29,134,192,118,27,0,208,108,3,
+ 193,240,15,3,192,60,14,0,112,56,0,48,28,112,48,96,192,227,128,198,1,220,1,240,
+ 3,224,3,128,7,0,31,0,62,0,238,1,140,7,28,12,24,48,56,224,49,128,48,96,
+ 28,192,99,3,134,12,28,112,49,128,236,1,240,7,128,14,0,48,0,192,3,0,12,0,
+ 48,0,192,3,0,12,0,48,0,127,252,255,248,0,96,1,192,7,0,12,0,56,0,224,
+ 1,128,7,0,28,0,48,0,224,3,128,6,0,28,0,112,0,255,249,255,240,60,60,48,
+ 48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,60,60,192,192,96,96,
+ 96,48,48,48,48,24,24,24,24,12,12,12,6,6,6,6,3,60,60,12,12,12,12,12,
+ 12,12,12,12,12,12,12,12,12,12,12,12,12,12,60,60,0,224,0,62,0,14,224,3,
+ 142,0,224,192,24,12,6,0,192,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,255,63,248,
+ 48,3,0,112,6,0,96,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+ 0,0,0,0,0,15,128,255,131,14,0,28,0,48,63,195,255,14,12,112,49,193,199,7,
+ 14,60,63,176,124,192,48,0,192,3,0,12,0,48,0,192,3,60,13,248,60,96,224,195,
+ 3,12,12,48,48,192,195,3,12,12,56,48,241,131,126,12,240,7,193,254,60,35,0,48,
+ 7,0,96,6,0,112,3,0,48,3,194,31,224,124,0,48,0,192,3,0,12,0,48,0,
+ 192,243,7,236,56,240,193,199,7,24,12,96,49,128,198,3,28,28,48,112,227,193,251,3,
+ 204,7,192,127,131,199,12,12,48,57,192,103,255,159,254,112,0,192,3,0,15,4,31,240,
+ 31,128,15,31,56,48,48,48,254,254,48,48,48,48,48,48,48,48,48,48,48,48,15,48,
+ 126,195,143,12,28,112,113,128,198,3,24,12,96,49,193,195,7,14,60,31,176,60,192,7,
+ 0,24,16,224,255,0,248,0,48,0,192,3,0,12,0,48,0,192,3,60,13,248,60,112,
+ 224,195,3,12,12,48,48,192,195,3,12,12,48,48,192,195,3,12,12,48,195,0,0,3,
+ 12,48,195,12,48,195,12,48,195,12,24,48,96,0,0,6,12,24,48,96,193,131,6,12,
+ 24,48,96,193,131,14,120,224,48,1,128,12,0,96,3,0,24,0,192,198,12,48,193,140,
+ 12,192,124,3,192,31,0,220,6,112,49,193,135,12,28,96,112,48,195,12,48,195,12,48,
+ 195,12,48,195,12,48,195,12,51,131,129,191,126,15,59,56,112,240,195,7,6,24,24,48,
+ 192,193,134,6,12,48,48,97,129,131,12,12,24,96,96,195,3,6,24,24,48,51,192,223,
+ 131,199,14,12,48,48,192,195,3,12,12,48,48,192,195,3,12,12,48,48,192,192,7,128,
+ 127,131,143,12,12,48,49,192,231,3,156,14,112,56,192,195,3,14,28,31,224,62,0,51,
+ 192,223,131,198,14,12,48,48,192,195,3,12,12,48,48,192,195,131,15,24,55,224,207,3,
+ 0,12,0,48,0,192,3,0,0,15,48,126,195,143,12,28,112,113,128,198,3,24,12,96,
+ 49,193,195,7,14,60,31,176,60,192,3,0,12,0,48,0,192,3,0,51,155,207,7,3,
+ 1,128,192,96,48,24,12,6,3,1,128,31,131,252,48,198,0,96,3,0,63,0,252,1,
+ 192,12,0,198,28,127,195,240,48,48,48,48,127,127,48,48,48,48,48,48,48,48,48,48,
+ 63,31,48,48,192,195,3,12,12,48,48,192,195,3,12,12,48,48,192,195,7,6,60,31,
+ 176,60,192,96,59,1,156,12,96,227,6,28,48,99,131,24,28,192,110,3,96,31,0,120,
+ 3,128,96,193,152,56,99,30,24,199,140,49,163,12,76,195,51,48,108,204,27,54,6,199,
+ 129,225,224,120,120,14,30,3,131,0,112,49,131,6,56,57,128,252,3,192,28,0,224,15,
+ 128,238,6,48,112,195,7,48,24,96,59,1,140,12,96,195,6,12,48,99,3,24,12,192,
+ 108,3,224,15,0,112,3,128,24,0,192,14,1,224,14,0,127,231,254,0,192,28,1,128,
+ 48,6,0,224,28,1,128,48,7,0,127,231,254,1,224,15,128,56,0,192,3,0,12,0,
+ 48,0,192,3,0,12,0,112,7,128,30,0,28,0,48,0,192,3,0,12,0,48,0,192,
+ 3,0,14,0,62,0,120,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,
+ 24,24,24,24,24,24,24,24,24,28,0,120,0,112,0,192,3,0,12,0,48,0,192,3,
+ 0,12,0,56,0,120,1,224,14,0,48,0,192,3,0,12,0,48,0,192,3,0,28,1,
+ 224,7,0,0,0,1,240,32,127,140,28,127,128,3,192,0,0,0,0,0,0,0,0,0,
+ 0,0,0,0,0,0,
+};
+const GFXglyph EnvironmentGaugeFontGlyphs[] PROGMEM={
+ {0,0,0,7,0,0},
+ {0,8,19,9,0,-19},
+ {19,10,19,10,0,-19},
+ {43,19,18,19,0,-18},
+ {86,14,24,14,0,-20},
+ {128,21,19,21,0,-19},
+ {178,17,19,17,0,-19},
+ {219,6,19,6,0,-19},
+ {234,8,23,9,0,-20},
+ {257,8,23,9,0,-20},
+ {280,11,19,11,0,-19},
+ {307,19,16,19,0,-16},
+ {345,7,6,7,0,-3},
+ {351,8,8,8,0,-8},
+ {359,7,3,7,0,-3},
+ {362,8,21,7,0,-19},
+ {383,14,19,14,0,-19},
+ {417,14,19,14,0,-19},
+ {451,14,19,14,0,-19},
+ {485,14,19,14,0,-19},
+ {519,14,19,14,0,-19},
+ {553,14,19,14,0,-19},
+ {587,14,19,14,0,-19},
+ {621,14,19,14,0,-19},
+ {655,14,19,14,0,-19},
+ {689,14,19,14,0,-19},
+ {723,8,13,7,0,-13},
+ {736,8,16,7,0,-13},
+ {752,19,15,19,0,-15},
+ {788,19,12,19,0,-12},
+ {817,19,15,19,0,-15},
+ {853,12,19,12,0,-19},
+ {882,22,23,22,0,-18},
+ {946,15,19,15,0,-19},
+ {982,15,19,15,0,-19},
+ {1018,15,19,15,0,-19},
+ {1054,17,19,17,0,-19},
+ {1095,14,19,14,0,-19},
+ {1129,13,19,13,0,-19},
+ {1160,17,19,17,0,-19},
+ {1201,17,19,17,0,-19},
+ {1242,7,19,7,0,-19},
+ {1259,8,24,7,-2,-19},
+ {1283,15,19,14,0,-19},
+ {1319,13,19,12,0,-19},
+ {1350,19,19,19,0,-19},
+ {1396,16,19,17,0,-19},
+ {1434,17,19,17,0,-19},
+ {1475,14,19,13,0,-19},
+ {1509,17,22,17,0,-19},
+ {1556,15,19,15,0,-19},
+ {1592,14,19,14,0,-19},
+ {1626,14,19,13,-1,-19},
+ {1660,16,19,16,0,-19},
+ {1698,15,19,15,0,-19},
+ {1734,22,19,22,0,-19},
+ {1787,15,19,15,0,-19},
+ {1823,14,19,13,-1,-19},
+ {1857,15,19,15,0,-19},
+ {1893,8,23,9,0,-20},
+ {1916,8,21,7,0,-19},
+ {1937,8,23,9,0,-20},
+ {1960,19,19,19,0,-19},
+ {2006,13,6,11,-1,0},
+ {2016,11,21,11,0,-21},
+ {2045,14,14,14,0,-14},
+ {2070,14,20,14,0,-20},
+ {2105,12,14,12,0,-14},
+ {2126,14,20,14,0,-20},
+ {2161,14,14,14,0,-14},
+ {2186,8,20,8,0,-20},
+ {2206,14,19,14,0,-14},
+ {2240,14,20,14,0,-20},
+ {2275,6,20,6,0,-20},
+ {2290,7,25,6,-1,-20},
+ {2312,13,20,13,0,-20},
+ {2345,6,20,6,0,-20},
+ {2360,21,14,22,0,-14},
+ {2397,14,14,14,0,-14},
+ {2422,14,14,14,0,-14},
+ {2447,14,19,14,0,-14},
+ {2481,14,19,14,0,-14},
+ {2515,9,14,9,0,-14},
+ {2531,12,14,12,0,-14},
+ {2552,8,18,9,0,-18},
+ {2570,14,14,14,0,-14},
+ {2595,13,14,13,0,-14},
+ {2618,18,14,18,0,-14},
+ {2650,13,14,13,0,-14},
+ {2673,13,19,13,0,-14},
+ {2704,12,14,12,0,-14},
+ {2725,14,24,14,0,-20},
+ {2767,8,26,7,0,-20},
+ {2793,14,24,14,0,-20},
+ {2835,19,11,19,0,-11},
+};
+const GFXfont EnvironmentGaugeFont PROGMEM={(uint8_t*)EnvironmentGaugeFontBits,(GFXglyph*)EnvironmentGaugeFontGlyphs,32,126,31};
 constexpr uint16_t rgb(int r,int g,int b) { return ((r&248)<<8)|((g&252)<<3)|(b>>3); }
 constexpr uint16_t BLACK=rgb(4,8,13), WHITE=rgb(236,245,245), CYAN=rgb(102,222,240);
 constexpr uint16_t DIM=rgb(88,127,144), GRID=rgb(20,42,55), DARK=rgb(11,24,34);
@@ -2751,48 +2994,112 @@ PressureTrend pressureTrend(){
  result.direction=result.fiveMinuteChange>0.002f?1:result.fiveMinuteChange<-.002f?-1:0;
  return result;
 }
-void pressureBar(Adafruit_GFX& d,float pressure,int y){
- const int left=78,rightEdge=195;d.fillRect(left,y+2,118,8,GRID);
- if(!isfinite(pressure))return;
- int w=lroundf(117*clipf((pressure-28)/3,0,1)),marker=left+w;
- d.fillRect(left,y+2,w,8,mix(GRID,CYAN,.40f));PressureTrend t=pressureTrend();
- // Fade length encodes direction only; the white marker retains the exact pressure scale.
- if(t.ready&&t.direction){for(int j=17;j>=0;--j){int x=marker-t.direction*j;
-  if(x>=left&&x<=rightEdge)d.drawFastVLine(x,y+2,8,mix(GRID,CYAN,1.0f-j/19.0f));}}
- else if(t.ready)d.fillRect(left,y+2,w,8,CYAN);
- rangeMarker(d,marker,y+2);
- // Direction glyph sits in the existing gap before the 31 inHg endpoint.
- if(!t.ready){text(d,200,y,"?",&SmallFont,AMBER);return;}
- const int x=204;
- if(t.direction>0){d.drawFastVLine(x,y+2,8,CYAN);d.drawLine(x-3,y+5,x,y+2,CYAN);d.drawLine(x+3,y+5,x,y+2,CYAN);}
- else if(t.direction<0){d.drawFastVLine(x,y+2,8,CYAN);d.drawLine(x-3,y+6,x,y+9,CYAN);d.drawLine(x+3,y+6,x,y+9,CYAN);}
- else d.drawFastHLine(x-3,y+5,7,CYAN);
+void environmentGaugeReading(Adafruit_GFX& d,int x,float reading,int decimals,const char* unit){
+ char valueText[20];if(isfinite(reading))snprintf(valueText,sizeof(valueText),"%.*f",decimals,(double)reading);else strcpy(valueText,"--");
+ center(d,x,109,valueText,&EnvironmentGaugeFont,WHITE);
+ center(d,x,132,unit,&EnvironmentGaugeFont,CYAN);
 }
-
-void environmentReading(Adafruit_GFX& d,int top,float reading,int decimals,const char* unit) {
- char b[32];if(isfinite(reading))snprintf(b,sizeof(b),"%.*f",decimals,(double)reading);else strcpy(b,"--");
- // One font and one baseline for each number/unit pair. Reserve the same unit
- // column for F, %, and inHg; no unit is reduced to fit.
- const GFXfont* f=&EnvironmentReadingFont;const int unitX=228-textWidth(d,"inHg",f),baseline=top+25;
- int16_t bx,by;uint16_t w,h;d.setFont(f);d.setTextSize(1);
- d.getTextBounds(b,0,0,&bx,&by,&w,&h);
- text(d,unitX-12-w,baseline+by,b,f,WHITE);
- d.getTextBounds(unit,0,0,&bx,&by,&w,&h);
- text(d,unitX,baseline+by,unit,f,CYAN);
+void temperatureGauge(Adafruit_GFX& d,float temperature,float glow){
+ const int x=44;const bool fresh=isfinite(temperature);
+ d.drawRoundRect(x-6,60,13,39,6,GRID);d.drawCircle(x,97,8,GRID);
+ // Fixed 40..100 F scale: mercury height follows the real reading only.
+ for(int i=0;i<5;++i)d.drawFastHLine(x+10,65+i*6,i%2?3:5,DIM);
+ center(d,22,60,"100",&EnvironmentSmallFont,DIM);center(d,23,90,"40",&EnvironmentSmallFont,DIM);
+ if(fresh){
+  const int level=92-lroundf(26*clipf((temperature-40)/60,0,1));
+  d.fillRect(x-3,level,7,98-level,CYAN);d.fillCircle(x,97,5,CYAN);
+  d.drawFastVLine(x-1,level,3,mix(CYAN,WHITE,glow));
+  d.drawCircle(x,97,6,mix(CYAN,WHITE,glow*.25f));
+ }
+}
+void humidityGauge(Adafruit_GFX& d,float humidity,float glow){
+ const int x=120,y=82;const bool fresh=isfinite(humidity);
+ for(int i=0;i<20;++i){
+  const bool filled=fresh&&humidity>=100.0f*(i+1)/20;
+  arc(d,x,y,22,150+i*12,159+i*12,filled?CYAN:GRID,3);
+ }
+ if(fresh){
+  float angle=radians(150+240*clipf(humidity/100,0,1));
+  d.fillCircle(x+lroundf(21*cosf(angle)),y+lroundf(21*sinf(angle)),2,mix(CYAN,WHITE,glow));
+  d.fillTriangle(x,72,x-5,82,x+5,82,mix(GRID,CYAN,.75f));
+  d.fillCircle(x,83,5,mix(GRID,CYAN,.75f));d.drawPixel(x-2,82,WHITE);
+ }
+ center(d,99,97,"0",&EnvironmentSmallFont,DIM);center(d,142,97,"100",&EnvironmentSmallFont,DIM);
+}
+void barometerGauge(Adafruit_GFX& d,float pressure,float glow){
+ const int x=196,y=82;arc(d,x,y,23,150,390,GRID,2);
+ for(int i=0;i<=8;++i){float a=radians(150+i*30);int r=i%2?19:17;
+  d.drawLine(x+lroundf(r*cosf(a)),y+lroundf(r*sinf(a)),x+lroundf(22*cosf(a)),y+lroundf(22*sinf(a)),DIM);
+ }
+ if(isfinite(pressure)){
+  float a=radians(150+240*clipf((pressure-28)/3,0,1));
+  d.drawLine(x,y,x+lroundf(18*cosf(a)),y+lroundf(18*sinf(a)),WHITE);
+  d.fillCircle(x,y,3,mix(CYAN,WHITE,glow*.4f));
+ }
+ center(d,174,97,"28",&EnvironmentSmallFont,DIM);center(d,218,97,"31",&EnvironmentSmallFont,DIM);
+}
+struct PressurePlotRange {float low=28,high=31;uint8_t populated=0;};
+PressurePlotRange pressurePlotRange(uint64_t now){
+ PressurePlotRange range;float low=INFINITY,high=-INFINITY;
+ const uint64_t current=now/PRESSURE_BUCKET_MS;
+ for(uint8_t i=0;i<49&&i<=current;++i){
+  const PressureBucket* b=pressureDay.get(current-i);if(!b)continue;
+  const uint64_t end=(b->id+1)*PRESSURE_BUCKET_MS;
+  if(now>=PRESSURE_DAY_MS&&end<=now-PRESSURE_DAY_MS)continue;
+  const float value=b->meanPa/3386.389f;low=fminf(low,value);high=fmaxf(high,value);++range.populated;
+ }
+ if(!range.populated)return range;
+ // Expanded inHg axis makes weather-scale changes visible; it is never zero-based.
+ if(high-low<.06f){const float midpoint=(high+low)*.5f;low=midpoint-.03f;high=midpoint+.03f;}
+ range.low=floorf((low-.02f)*50)/50;range.high=ceilf((high+.02f)*50)/50;
+ return range;
+}
+void pressureHistogram(Adafruit_GFX& d,float glow){
+ const uint64_t now=nowMs(),current=now/PRESSURE_BUCKET_MS;
+ const int left=48,rightEdge=228,top=184,bottom=218,width=rightEdge-left;
+ const int64_t windowStart=(int64_t)now-(int64_t)PRESSURE_DAY_MS;
+ const PressurePlotRange range=pressurePlotRange(now);
+ text(d,12,164,"PRESSURE / 24H",&EnvironmentSmallFont,DIM);
+ right(d,228,164,"inHg",&EnvironmentSmallFont,DIM);
+ PressureTrend trend=pressureTrend();
+ if(trend.ready){const int x=187,y=169;
+  if(trend.direction){int end=y-4*trend.direction;d.drawLine(x,y+4*trend.direction,x,end,CYAN);
+   d.drawLine(x,end,x-3,end+3*trend.direction,CYAN);d.drawLine(x,end,x+3,end+3*trend.direction,CYAN);}
+  else d.drawFastHLine(x-3,y,7,CYAN);
+ }
+ for(int i=0;i<3;++i)d.drawFastHLine(left,top+i*(bottom-top)/2,width,GRID);
+ for(int i=0;i<3;++i)d.drawFastVLine(left+i*(width-1)/2,top,bottom-top+1,DARK);
+ char label[16];snprintf(label,sizeof(label),"%.2f",range.high);right(d,40,top-4,label,&EnvironmentSmallFont,DIM);
+ snprintf(label,sizeof(label),"%.2f",range.low);right(d,40,bottom-8,label,&EnvironmentSmallFont,DIM);
+ for(uint8_t i=0;i<49&&i<=current;++i){
+  const PressureBucket* b=pressureDay.get(current-i);if(!b)continue;
+  const int64_t start=(int64_t)(b->id*PRESSURE_BUCKET_MS),end=start+PRESSURE_BUCKET_MS;
+  if(end<=windowStart)continue;
+  int x0=left+(int)floor((double)(start-windowStart)*width/PRESSURE_DAY_MS);
+  int x1=left+(int)floor((double)(end-windowStart)*width/PRESSURE_DAY_MS);
+  x0=clipi(x0,left,rightEdge-1);x1=clipi(x1,left+1,rightEdge);
+  const int barWidth=max(1,x1-x0-1);
+  const float fraction=clipf((b->meanPa/3386.389f-range.low)/(range.high-range.low),0,1);
+  const int y=bottom-lroundf((bottom-top)*fraction);
+  const float brightness=.35f+.5f*(1.0f-i/48.0f);
+  d.fillRect(x0,y,barWidth,bottom-y,mix(GRID,CYAN,brightness));
+  const bool live=i==0&&envFresh();
+  d.drawFastHLine(x0,y,barWidth,live?mix(CYAN,WHITE,glow*.5f):CYAN);
+ }
+ if(!range.populated)center(d,138,196,envFresh()?"COLLECTING":"WAITING FOR BME",&EnvironmentSmallFont,DIM);
+ else if(range.populated==1&&now<PRESSURE_BUCKET_MS)center(d,128,196,"COLLECTING",&EnvironmentSmallFont,DIM);
+ text(d,left,225,"-24h",&EnvironmentSmallFont,DIM);center(d,left+width/2,225,"-12h",&EnvironmentSmallFont,DIM);right(d,rightEdge,225,"NOW",&EnvironmentSmallFont,DIM);
 }
 void environmentMain(Adafruit_GFX& d){
- mainHeader(d,"ENVIRONMENT",&EnvironmentTitleFont);bool fresh=envFresh();
- const float temperature=environmentTemperatureF(), humidity=environmentHumidity();
- text(d,12,53,"TEMP",&EnvironmentLabelFont,DIM);environmentReading(d,47,temperature,0,"F");
- text(d,12,96,"RH",&EnvironmentLabelFont,DIM);environmentReading(d,90,humidity,0,"%");
- text(d,12,139,"BARO",&EnvironmentLabelFont,DIM);environmentReading(d,133,fresh?env.p/3386.389f:NAN,2,"inHg");
- const float vals[3]={temperature,humidity,fresh?env.p/3386.389f:NAN};
- const float lo[3]={40,0,28},hi[3]={100,100,31};const char* labels[3]={"F","%RH","inHg"};
- for(int i=0;i<3;++i){int y=180+i*20;char b[12];text(d,12,y,labels[i],&EnvironmentSmallFont,DIM);
-  snprintf(b,sizeof(b),"%.0f",lo[i]);right(d,70,y,b,&EnvironmentSmallFont,DIM);snprintf(b,sizeof(b),"%.0f",hi[i]);right(d,228,y,b,&EnvironmentSmallFont,DIM);
-  if(i==2){pressureBar(d,vals[i],y);continue;}
-  d.fillRect(78,y+2,118,8,GRID);if(isfinite(vals[i])){int w=lroundf(117*clipf((vals[i]-lo[i])/(hi[i]-lo[i]),0,1));d.fillRect(78,y+2,w,8,CYAN);rangeMarker(d,78+w,y+2);}
- }
+ mainHeader(d,"ENVIRONMENT",&EnvironmentTitleFont);
+ const float temperature=environmentTemperatureF(),humidity=environmentHumidity(),pressure=envFresh()?env.p/3386.389f:NAN;
+ const float glow=.5f+.5f*sinf((nowMs()%4000)*6.2831853f/4000.0f);
+ // Three equal instrument bays, with the same typeface and number/unit size.
+ center(d,44,43,"TEMP",&EnvironmentLabelFont,DIM);center(d,120,43,"RH",&EnvironmentLabelFont,DIM);center(d,196,43,"BARO",&EnvironmentLabelFont,DIM);
+ d.drawFastVLine(82,44,105,GRID);d.drawFastVLine(158,44,105,GRID);
+ temperatureGauge(d,temperature,glow);humidityGauge(d,humidity,glow);barometerGauge(d,pressure,glow);
+ environmentGaugeReading(d,44,temperature,0,"F");environmentGaugeReading(d,120,humidity,0,"%");environmentGaugeReading(d,196,pressure,2,"inHg");
+ rule(d,158);pressureHistogram(d,glow);
 }
 
 void radar(Adafruit_GFX& d) {
@@ -3418,7 +3725,7 @@ String statusJSON() {
  const ParticleAQI paqi=particleAQI();const PressureTrend pressure=pressureTrend();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(4500);
- s="{\"firmware\":\"BREATHE 4.5.0\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.5.1\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -3536,7 +3843,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.5.0</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.5.1</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Particle AQI is a live estimate from current PM2.5/PM10 mass readings using EPA breakpoints, without daily or NowCast averaging. VoC Air Quality is the separate Bosch IAQ index after run-in and calibration. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -3571,7 +3878,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.5.0");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.5.1");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);

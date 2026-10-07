@@ -1,6 +1,8 @@
 # BREATHE and Home Assistant
 
 Firmware 4.5.0 adds MQTT discovery to the existing Arduino/PlatformIO build.
+Firmware 4.5.1 retains the same 92 entities and connection settings while adding
+the redesigned Environment gauges and local 24-hour pressure histogram.
 The display, sensor acquisition and button controls continue to work independently.
 Home Assistant records incoming readings and can use them in dashboards and
 automations. Existing on-device history buffers are not backfilled into HA.
@@ -65,10 +67,13 @@ in that entity's settings. Raw probe entities include the sensor name so they
 cannot be mistaken for the Environment reading. BME moisture calculations use
 the BME's paired raw temperature and humidity, as on its existing info screens.
 
-The pressure trend is exactly the fitted trend used by the display. It needs at
+The pressure trend is exactly the fitted trend used by the display's small arrow.
+It needs at
 least two continuous minutes of valid history and uses up to five minutes.
 Insufficient or stale history makes the trend unavailable, even while the current
 pressure reading remains available.
+The screen's 24-hour histogram is separate RAM history built from half-hour mean
+pressures. It clears on reboot and does not change HA's own recorded history.
 
 ## Topics and recovery
 
