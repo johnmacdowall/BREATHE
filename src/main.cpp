@@ -1,5 +1,6 @@
 /*
- BREATHE // INSTRUMENT OS 4.4.8 -- 06 October 2026
+ BREATHE // INSTRUMENT OS 4.5.0 -- 06 October 2026
+ Home Assistant MQTT discovery and 10-second telemetry; local credentials only.
  Gas main title: VoC AIR QUALITY; calibration details remain on gas-info6.
  Brighter cyan, amber and violet ribbons frame IAQ; motion requires a valid reading.
  Text colors +20% then +30%; main ribbons brightened another 30%; T/RH whole numbers.
@@ -69,6 +70,7 @@
 constexpr char WIFI_SSID[] = "";
 constexpr char WIFI_PASSWORD[] = "";
 #endif
+constexpr char FIRMWARE_VERSION[]="4.5.0";
 constexpr int BUTTON_GPIO = 3;     // XIAO D1 / GPIO3 -> pushbutton -> GND.
 constexpr bool ENABLE_PMS = true; // Absent PMS simply stays offline.
 constexpr int PMS_RX_GPIO = 20;    // D7 <- PIM477 pin labelled RX (sensor TX).
@@ -3408,14 +3410,15 @@ void drawFrame() {
 // -------------------------- Serial + local status -------------------------
 bool wifiStarted=false, wasConnected=false;
 uint32_t reconnectAt=0, logAt=0, wifiDropouts=0, httpRequests=0;
+#include "home_assistant.h"
 String jsonNumber(double v,int decimals=3) { return isfinite(v)?String(v,decimals):String("null"); }
 String jsonBool(bool v) { return v?String("true"):String("false"); }
 String statusJSON() {
  const bool ef=envFresh(), gf=gasFresh(), pf=pmFresh(), cf=co2Fresh(), sf=si7021Fresh();
- const ParticleAQI paqi=particleAQI();
+ const ParticleAQI paqi=particleAQI();const PressureTrend pressure=pressureTrend();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
- String s; s.reserve(3700);
- s="{\"firmware\":\"BREATHE 4.4.8\",\"page\":\"";s+=PAGE_NAMES[page];
+ String s; s.reserve(4500);
+ s="{\"firmware\":\"BREATHE 4.5.0\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -3465,7 +3468,7 @@ String statusJSON() {
  s+=",\"category\":"+(paqi.valid?String("\"")+particleAQICategoryName(paqi.index)+"\"":String("null"));
  s+=",\"method\":\"EPA May 2026 breakpoints; maximum PM2.5/PM10 subindex\",\"averaging\":\"none; instantaneous\"}";
  s+=",\"cumulative_counts_per_0_1L\":[";
- for(int i=0;i<6;++i) { if(i)s+=",";s+=jsonNumber(pf?pm.counts[i]:NAN,0); }
+ for(int i=0;i<6;++i) { if(i)s+=",";s+=jsonNumber(pf&&pm.countsOK?pm.counts[i]:NAN,0); }
  s+="],\"thresholds_um\":[0.3,0.5,1,2.5,5,10],\"bad_frames\":"+String(pm.bad);
  s+=",\"good_frames\":"+String(pm.good);
  char byteCount[24]; snprintf(byteCount,sizeof(byteCount),"%llu",(unsigned long long)pmsDiag.bytes);
@@ -3475,7 +3478,10 @@ String statusJSON() {
  s+=",\"rx_gpio\":"+String(PMS_RX_GPIO)+",\"tx_gpio\":"+String(PMS_TX_GPIO);
  s+=",\"baud\":9600,\"sensor_error\":"+String(pm.error)+"}";
  s+=",\"co2\":{\"enabled\":"+jsonBool(ENABLE_SCD41)+",\"fresh\":"+jsonBool(cf);
- s+=",\"ppm\":"+jsonNumber(cf?co2.ppm:NAN,0)+"}";
+ s+=",\"ppm\":"+jsonNumber(cf?co2.ppm:NAN,0);
+ s+=",\"temperature_C\":"+jsonNumber(cf?co2.t:NAN)+",\"humidity_pct\":"+jsonNumber(cf?co2.rh:NAN);
+ s+=",\"age_s\":"+jsonNumber(co2.have?(nowMs()-co2.ms)/1000.0:NAN,1);
+ s+=",\"good\":"+String(co2.good)+",\"failed\":"+String(co2.bad)+"}";
  s+=",\"si7021\":{\"enabled\":"+jsonBool(ENABLE_SI7021)+",\"found\":"+jsonBool(si7021.present);
  s+=",\"configured\":"+jsonBool(si7021.configured)+",\"fresh\":"+jsonBool(sf);
  s+=",\"temperature_C\":"+jsonNumber(sf?si7021.t:NAN)+",\"humidity_pct\":"+jsonNumber(sf?si7021.rh:NAN);
@@ -3486,7 +3492,9 @@ String statusJSON() {
  s+=",\"temperature_F\":"+jsonNumber(environmentTemperatureF());
  s+=",\"humidity_average_pct\":"+jsonNumber(environmentHumidity());
  s+=",\"temperature_fresh\":"+jsonBool(sf)+",\"humidity_fresh\":"+jsonBool(environmentHumidityFresh());
- s+=",\"pressure_inHg\":"+jsonNumber(ef?env.p/3386.389f:NAN)+"}";
+ s+=",\"pressure_inHg\":"+jsonNumber(ef?env.p/3386.389f:NAN);
+ s+=",\"pressure_trend\":"+(pressure.ready?String("\"")+(pressure.direction>0?"rising":pressure.direction<0?"falling":"steady")+"\"":String("null"));
+ s+=",\"pressure_change_5min_inHg\":"+jsonNumber(pressure.ready?pressure.fiveMinuteChange:NAN,5)+"}";
  s+=",\"light\":{\"found\":"+jsonBool(light.present)+",\"fresh\":"+jsonBool(lightFresh());
  s+=",\"lux_estimate\":"+jsonNumber(lightFresh()&&!light.saturated?light.lux:NAN,1);
  s+=",\"saturated\":"+jsonBool(light.saturated)+",\"raw\":"+jsonNumber(lightFresh()?light.raw:NAN,0);
@@ -3497,6 +3505,11 @@ String statusJSON() {
  s+=",\"max_draw_ms\":"+jsonNumber(perf.maxDrawUs/1000.0);
  s+=",\"frame_overruns\":"+String(perf.overruns)+",\"spi_hz\":"+String(spiHz)+"}";
  s+=",\"wifi_connected\":"+jsonBool(WiFi.status()==WL_CONNECTED);
+ s+=",\"wifi_rssi_dbm\":"+jsonNumber(WiFi.status()==WL_CONNECTED?WiFi.RSSI():NAN,0);
+ s+=",\"mqtt\":{\"configured\":"+jsonBool(BREATHE_MQTT_HOST[0]);
+ s+=",\"connected\":"+jsonBool(mqttConnected.load())+",\"connections\":"+String(mqttConnections.load());
+ s+=",\"errors\":"+String(mqttErrors.load())+",\"reports_queued\":"+String(mqttReports);
+ s+=",\"discovery_queued\":"+String(mqttClient?mqttDiscoveryIndex:0)+",\"entities\":"+String(HA_ENTITY_COUNT)+"}";
  s+=",\"wifi_dropouts\":"+String(wifiDropouts)+",\"http_requests\":"+String(httpRequests);
  s+=",\"heap_free\":"+String(ESP.getFreeHeap())+",\"heap_min\":"+String(ESP.getMinFreeHeap())+"}";
  return s;
@@ -3523,7 +3536,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.4.8</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.5.0</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Particle AQI is a live estimate from current PM2.5/PM10 mass readings using EPA breakpoints, without daily or NowCast averaging. VoC Air Quality is the separate Bosch IAQ index after run-in and calibration. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -3552,13 +3565,13 @@ void serviceNetwork() {
  if(!connected && wasConnected)++wifiDropouts;
  wasConnected=connected;
  if(!connected && due32(millis(),reconnectAt)) {WiFi.reconnect();reconnectAt=millis()+30000;}
- server.handleClient();
+ server.handleClient();serviceMQTT();
 }
 
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.4.8");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.5.0");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);
@@ -3584,6 +3597,7 @@ void setup() {
  rngState=esp_random();if(!rngState)rngState=0x63C3B680;
  bootAt=pageSince=perf.startMs=perf.fpsAt=nowMs();
  startWiFi();logAt=millis()+10000;
+ if(!BREATHE_MQTT_HOST[0])Serial.println("MQTT disabled: add BREATHE_MQTT_HOST settings to local secrets.h.");
  Serial.println("n/p next/previous | l details/return | h home | g Bosch | e environment");
  Serial.println("a/SPACE auto-tour | s status | b boot | 1/4 10/40MHz SPI");
  if(BUTTON_GPIO<0)Serial.println("Physical button disabled: confirmed working configuration was GPIO -1.");

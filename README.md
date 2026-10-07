@@ -1,7 +1,12 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.4.8**, with the reviewed screen changes from October 6, 2026.
+Current firmware: Instrument OS **4.5.0**, with Home Assistant MQTT discovery and
+the reviewed screen changes from October 6, 2026.
+The optional MQTT connection automatically registers **92 entities** under one
+BREATHE device and publishes a full snapshot every ten seconds. Telemetry uses
+the `air` topic prefix; discovery uses `homeassistant`. Broker credentials stay in
+the ignored local `include/secrets.h`. See [Home Assistant setup](HOME_ASSISTANT.md).
 Temperature and relative humidity display as whole numbers, including their history
 labels; sensor values and calculations keep full precision. Environment's pressure
 label is **BARO**. Text colors are 30% brighter again after the previous 20% increase
@@ -48,8 +53,9 @@ layout for the six cumulative size thresholds. `pms-info2` retains PM2.5 history
 6. Build using PlatformIO's checkmark. Connect the XIAO by USB and use PlatformIO's
    Upload arrow. Use the serial monitor at **115200 baud** when needed.
 
-The source file is `src/main.cpp`. This is a complete PlatformIO project; open its
-root folder containing `platformio.ini` when building.
+The main source file is `src/main.cpp`; MQTT support is in `include/home_assistant.h`.
+This is a complete PlatformIO project; open its root folder containing
+`platformio.ini` when building. Pull the complete project for this update.
 
 ## Sharing changes
 
@@ -97,7 +103,9 @@ The Si7021 is read about every two seconds using nonblocking no-hold conversions
 CRC validation for both measurements, and automatic retries after communication
 failure. Its heater stays off; sensor values and history retain full precision.
 `env-info8` shows Si temperature, Si RH, BME RH, averaged RH, Si sample age and errors.
-The local `/status` JSON exposes the same sources and sensor health separately.
+The local `/status` JSON and MQTT state topic expose the same sources and sensor
+health separately. SCD41 temperature/RH are included as explicitly named raw
+diagnostics; Environment keeps the sources described above.
 Raw BME temperature and its paired-temperature/RH moisture calculations remain on
 the explicitly labeled BME information pages. SCD41 continues to supply CO2.
 Sensor calibration offsets have not been changed.
@@ -107,6 +115,8 @@ trail and an arrow indicate rising or falling pressure; a dash means steady.
 A question mark means insufficient recent history. The fit uses up to five minutes
 of readings and needs at least two continuous minutes. Pressure is station pressure,
 without sea-level correction.
+The same fitted trend is exported as `rising`, `falling` or `steady`, along with
+the fitted five-minute pressure change. Insufficient history produces `null`.
 
 The PMS5003 count above 0.3 micrometers is already the cumulative total above
 its smallest reported size threshold, per 0.1 liter of air. Each of the other
@@ -163,6 +173,8 @@ from the current firmware. BSEC owns the BME680 heater and measurement timing.
 
 The target is `seeed_xiao_esp32c3`, Arduino framework, Espressif32 platform 7.1.3.
 Library versions and the Bosch BSEC2 commit are pinned in `platformio.ini`.
+MQTT uses the ESP-IDF MQTT client and cJSON bundled with the pinned ESP32 framework;
+there are no additional PlatformIO library dependencies.
 PlatformIO downloads these dependencies; third-party libraries and compiled firmware
 are not included in this repository.
 
