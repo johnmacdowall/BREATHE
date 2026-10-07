@@ -1,5 +1,5 @@
 /*
- BREATHE // INSTRUMENT OS 4.5.1 -- 07 October 2026
+ BREATHE // INSTRUMENT OS 4.5.2 -- 07 October 2026
  Home Assistant MQTT discovery and 10-second telemetry; local credentials only.
  Gas main title: VoC AIR QUALITY; calibration details remain on gas-info6.
  Brighter cyan, amber and violet ribbons frame IAQ; motion requires a valid reading.
@@ -71,7 +71,7 @@
 constexpr char WIFI_SSID[] = "";
 constexpr char WIFI_PASSWORD[] = "";
 #endif
-constexpr char FIRMWARE_VERSION[]="4.5.1";
+constexpr char FIRMWARE_VERSION[]="4.5.2";
 constexpr int BUTTON_GPIO = 3;     // XIAO D1 / GPIO3 -> pushbutton -> GND.
 constexpr bool ENABLE_PMS = true; // Absent PMS simply stays offline.
 constexpr int PMS_RX_GPIO = 20;    // D7 <- PIM477 pin labelled RX (sensor TX).
@@ -2996,8 +2996,14 @@ PressureTrend pressureTrend(){
 }
 void environmentGaugeReading(Adafruit_GFX& d,int x,float reading,int decimals,const char* unit){
  char valueText[20];if(isfinite(reading))snprintf(valueText,sizeof(valueText),"%.*f",decimals,(double)reading);else strcpy(valueText,"--");
- center(d,x,109,valueText,&EnvironmentGaugeFont,WHITE);
- center(d,x,132,unit,&EnvironmentGaugeFont,CYAN);
+ // Center the complete reading; number and unit share one baseline and font.
+ d.setFont(&EnvironmentGaugeFont);d.setTextSize(1);d.setTextWrap(false);
+ int16_t vx,vy,ux,uy;uint16_t vw,vh,uw,uh;
+ d.getTextBounds(valueText,0,0,&vx,&vy,&vw,&vh);
+ d.getTextBounds(unit,0,0,&ux,&uy,&uw,&uh);
+ const int gap=*unit?3:0,left=x-(vw+gap+uw)/2,baseline=133;
+ d.setTextColor(WHITE);d.setCursor(left-vx,baseline);d.print(valueText);
+ if(*unit){d.setTextColor(CYAN);d.setCursor(left+vw+gap-ux,baseline);d.print(unit);}
 }
 void temperatureGauge(Adafruit_GFX& d,float temperature,float glow){
  const int x=44;const bool fresh=isfinite(temperature);
@@ -3056,13 +3062,13 @@ PressurePlotRange pressurePlotRange(uint64_t now){
 }
 void pressureHistogram(Adafruit_GFX& d,float glow){
  const uint64_t now=nowMs(),current=now/PRESSURE_BUCKET_MS;
- const int left=48,rightEdge=228,top=184,bottom=218,width=rightEdge-left;
+ const int left=48,rightEdge=228,top=172,bottom=218,width=rightEdge-left;
  const int64_t windowStart=(int64_t)now-(int64_t)PRESSURE_DAY_MS;
  const PressurePlotRange range=pressurePlotRange(now);
- text(d,12,164,"PRESSURE / 24H",&EnvironmentSmallFont,DIM);
- right(d,228,164,"inHg",&EnvironmentSmallFont,DIM);
+ text(d,12,150,"PRESSURE / 24H",&EnvironmentSmallFont,DIM);
+ right(d,228,150,"inHg",&EnvironmentSmallFont,DIM);
  PressureTrend trend=pressureTrend();
- if(trend.ready){const int x=187,y=169;
+ if(trend.ready){const int x=187,y=155;
   if(trend.direction){int end=y-4*trend.direction;d.drawLine(x,y+4*trend.direction,x,end,CYAN);
    d.drawLine(x,end,x-3,end+3*trend.direction,CYAN);d.drawLine(x,end,x+3,end+3*trend.direction,CYAN);}
   else d.drawFastHLine(x-3,y,7,CYAN);
@@ -3096,10 +3102,10 @@ void environmentMain(Adafruit_GFX& d){
  const float glow=.5f+.5f*sinf((nowMs()%4000)*6.2831853f/4000.0f);
  // Three equal instrument bays, with the same typeface and number/unit size.
  center(d,44,43,"TEMP",&EnvironmentLabelFont,DIM);center(d,120,43,"RH",&EnvironmentLabelFont,DIM);center(d,196,43,"BARO",&EnvironmentLabelFont,DIM);
- d.drawFastVLine(82,44,105,GRID);d.drawFastVLine(158,44,105,GRID);
+ d.drawFastVLine(82,44,94,GRID);d.drawFastVLine(158,44,94,GRID);
  temperatureGauge(d,temperature,glow);humidityGauge(d,humidity,glow);barometerGauge(d,pressure,glow);
- environmentGaugeReading(d,44,temperature,0,"F");environmentGaugeReading(d,120,humidity,0,"%");environmentGaugeReading(d,196,pressure,2,"inHg");
- rule(d,158);pressureHistogram(d,glow);
+ environmentGaugeReading(d,44,temperature,0,"F");environmentGaugeReading(d,120,humidity,0,"%");environmentGaugeReading(d,196,pressure,2,"");
+ rule(d,144);pressureHistogram(d,glow);
 }
 
 void radar(Adafruit_GFX& d) {
@@ -3725,7 +3731,7 @@ String statusJSON() {
  const ParticleAQI paqi=particleAQI();const PressureTrend pressure=pressureTrend();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(4500);
- s="{\"firmware\":\"BREATHE 4.5.1\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.5.2\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -3843,7 +3849,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.5.1</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.5.2</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Particle AQI is a live estimate from current PM2.5/PM10 mass readings using EPA breakpoints, without daily or NowCast averaging. VoC Air Quality is the separate Bosch IAQ index after run-in and calibration. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -3878,7 +3884,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.5.1");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.5.2");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);

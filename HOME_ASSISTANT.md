@@ -1,7 +1,7 @@
 # BREATHE and Home Assistant
 
 Firmware 4.5.0 adds MQTT discovery to the existing Arduino/PlatformIO build.
-Firmware 4.5.1 retains the same 92 entities and connection settings while adding
+Firmware 4.5.2 retains the same 92 entities and connection settings while adding
 the redesigned Environment gauges and local 24-hour pressure histogram.
 The display, sensor acquisition and button controls continue to work independently.
 Home Assistant records incoming readings and can use them in dashboards and

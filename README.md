@@ -1,7 +1,7 @@
 # BREATHE
 
 Air monitor firmware for John's Seeed XIAO ESP32-C3 and 240 x 240 ST7789 display.
-Current firmware: Instrument OS **4.5.1**, with the Environment instrument-panel
+Current firmware: Instrument OS **4.5.2**, with the Environment instrument-panel
 redesign from October 7, 2026 and Home Assistant MQTT discovery.
 The optional MQTT connection automatically registers **92 entities** under one
 BREATHE device and publishes a full snapshot every ten seconds. Telemetry uses
@@ -25,8 +25,10 @@ The CO2 eye is moved up four pixels to center it between its title and lower cap
 CO2, Particle AQI, particle count and VoC numbers share a 33-pixel-high font; CO2 uses a
 compact fallback for five-digit readings. The subtle eye animation is retained.
 Environment is now split into three equal columns: a thermometer, humidity ring,
-and barometer dial. The numeric readings sit beneath the gauges, with **F**,
-**%** and **inHg** on a second line in the same font and size as the numbers.
+and barometer dial. The numeric readings sit beneath the gauges, with **F** and
+**%** beside their numbers on the same baseline and in the same font size. The
+pressure reading has no separate unit line; **inHg** labels the histogram below.
+The freed space gives the pressure histogram a taller plotting area.
 The established sans-serif family and cyan/white palette are retained. Small
 highlights brighten gently on a four-second cycle while their readings are valid;
 gauge positions follow measurements, with no artificial needle or level movement.
