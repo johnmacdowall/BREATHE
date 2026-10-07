@@ -74,7 +74,8 @@ constexpr char FIRMWARE_VERSION[]="4.5.0";
 constexpr int BUTTON_GPIO = 3;     // XIAO D1 / GPIO3 -> pushbutton -> GND.
 constexpr bool ENABLE_PMS = true; // Absent PMS simply stays offline.
 constexpr int PMS_RX_GPIO = 20;    // D7 <- PIM477 pin labelled RX (sensor TX).
-constexpr int PMS_TX_GPIO = 21;   // D6 -> PIM477 pin labelled TX (sensor RX); no commands sent yet.
+constexpr int PMS_TX_GPIO = -1;   // Receive-only UART; sensor RX unconnected, no D6 required.
+constexpr int TFT_CS_GPIO = 9;    // XIAO D9 / GPIO9 -> ST7789 CS.
 constexpr uint32_t PMS_WARMUP_MS = 30000;
 uint64_t pmsStartedMs = 0;
 constexpr bool ENABLE_VEML7700 = true;
@@ -106,9 +107,10 @@ constexpr float MAG_A = 17.62f, MAG_B = 243.12f, MAG_C = 6.112f;
 constexpr float WATER_VAPOR_R = 461.5f; // J/(kg K); ideal-gas approximation.
 static_assert(BUTTON_GPIO < 0 || (BUTTON_GPIO != 4 && BUTTON_GPIO != 5 &&
  BUTTON_GPIO != 6 && BUTTON_GPIO != 7 && BUTTON_GPIO != 8 && BUTTON_GPIO != 10 &&
+ BUTTON_GPIO != TFT_CS_GPIO &&
  (!ENABLE_PMS || BUTTON_GPIO != PMS_RX_GPIO)), "Button conflicts with sensor/display");
 
-Adafruit_ST7789 tft(&SPI, -1, 5, 4);
+Adafruit_ST7789 tft(&SPI, TFT_CS_GPIO, 5, 4); // CS D9, DC D3, RES D2.
 Bsec2 bosch;
 Preferences boschStore;
 alignas(8) uint8_t boschMemory[BSEC_INSTANCE_SIZE];
@@ -3591,7 +3593,7 @@ void setup() {
   pinMode(PMS_RX_GPIO,INPUT_PULLUP); // BEFORE UART claims RX (ESP32 core 3.x safe)
   pmsStartedMs=nowMs();
   pmsPort.begin(9600,SERIAL_8N1,PMS_RX_GPIO,PMS_TX_GPIO);
-  Serial.println("PMS5003 UART D7 RX / D6 TX; stabilizing for 30 seconds.");
+  Serial.println("PMS5003 UART D7 RX only; sensor RX unused; stabilizing for 30 seconds.");
  }
  if(BUTTON_GPIO>=0)pinMode(BUTTON_GPIO,INPUT_PULLUP);
  rngState=esp_random();if(!rngState)rngState=0x63C3B680;

@@ -156,20 +156,23 @@ saved in NVS; screen histories are RAM-only.
 | Shared I2C SCL | D5 / GPIO7 |
 | ST7789 SCK | D8 / GPIO8 |
 | ST7789 MOSI | D10 / GPIO10 |
+| ST7789 CS (firmware-controlled) | D9 / GPIO9 |
 | ST7789 RES | D2 / GPIO4 |
 | ST7789 DC | D3 / GPIO5 |
 | ST7789 backlight PWM | D0 / GPIO2 |
 | Button to ground (internal pull-up) | D1 / GPIO3 |
-| PMS UART receive | D7 / GPIO20 |
-| PMS UART transmit (no commands currently sent) | D6 / GPIO21 |
+| PMS5003 sensor TX -> UART receive | D7 / GPIO20 |
+| PMS5003 sensor RX | Unconnected; no XIAO D6 connection required |
 
 Connect Si7021 **VIN to the 3.3V bus**, **GND to GND**, **SDA to D4/GPIO6**, and
 **SCL to D5/GPIO7**. Leave the breakout's **3Vo output unconnected**. Its I2C address is **0x40**. Place it away from the Bosch
 heater, display and processor heat when evaluating room temperature.
 
-The PMS connection names in `src/main.cpp` preserve the existing working PIM477
-wiring. Sensor acquisition, light control, and display pin assignments are retained
-from the current firmware. BSEC owns the BME680 heater and measurement timing.
+The PMS UART is receive-only at 9600 baud: sensor TX connects through the PIM477
+pin labelled RX to D7/GPIO20. Sensor RX remains unconnected; UART TX is disabled
+with pin -1. The ST7789 driver controls CS on D9/GPIO9. Sensor acquisition,
+light control, display rendering and SPI timing are unchanged.
+BSEC owns the BME680 heater and measurement timing.
 
 The target is `seeed_xiao_esp32c3`, Arduino framework, Espressif32 platform 7.1.3.
 Library versions and the Bosch BSEC2 commit are pinned in `platformio.ini`.
