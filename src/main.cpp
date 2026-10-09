@@ -1,5 +1,5 @@
 /*
- BREATHE // INSTRUMENT OS 4.5.5 -- 07 October 2026
+ BREATHE // INSTRUMENT OS 4.5.6 -- 07 October 2026
  Home Assistant MQTT discovery and 10-second telemetry; local credentials only.
  Gas main title: VoC AIR QUALITY; calibration details remain on gas-info6.
  Brighter cyan, amber and violet ribbons frame IAQ; motion requires a valid reading.
@@ -71,7 +71,7 @@
 constexpr char WIFI_SSID[] = "";
 constexpr char WIFI_PASSWORD[] = "";
 #endif
-constexpr char FIRMWARE_VERSION[]="4.5.5";
+constexpr char FIRMWARE_VERSION[]="4.5.6";
 constexpr int BUTTON_GPIO = 3;     // XIAO D1 / GPIO3 -> pushbutton -> GND.
 constexpr bool ENABLE_PMS = true; // Absent PMS simply stays offline.
 constexpr int PMS_RX_GPIO = 20;    // D7 <- PIM477 pin labelled RX (sensor TX).
@@ -90,7 +90,7 @@ constexpr bool ENABLE_SI7021 = true; // Si7021 at 0x40 on the same D4/D5 bus, po
 constexpr uint32_t SI7021_STALE_MS = 6000;
 constexpr bool START_AUTO_TOUR = false;
 constexpr bool INTAKE_ON_LEFT = true; // Visual convention; flip for final enclosure.
-constexpr uint32_t FINAL_SPI_HZ = 10000000; // Conservative display link; '4' still selects 40 MHz.
+constexpr uint32_t FINAL_SPI_HZ = 40000000; // Confirmed working display speed; '1' selects 10 MHz.
 constexpr uint32_t FRAME_US = 50000, SAMPLE_MS = 2000, TOUR_MS = 15000;
 constexpr uint32_t ENV_STALE_MS = 6000, PM_STALE_MS = 8000, CO2_STALE_MS = 15000;
 constexpr uint32_t DEBOUNCE_MS = 30, HOLD_MS = 700, CLICK_GAP_MS = 350;
@@ -3708,7 +3708,7 @@ void drawFrame() {
 
 // -------------------------- Serial + local status -------------------------
 // Timed display recovery workaround. No reboot, page change or boot animation.
-constexpr uint32_t DISPLAY_RECOVERY_MS=3000;
+constexpr uint32_t DISPLAY_RECOVERY_MS=10000;
 bool displayAutoRecovery=true;
 uint32_t displayRecoveryAt=0,displayRecoveryCount=0;
 void recoverDisplay() {
@@ -3733,7 +3733,7 @@ String statusJSON() {
  const ParticleAQI paqi=particleAQI();const PressureTrend pressure=pressureTrend();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(4500);
- s="{\"firmware\":\"BREATHE 4.5.5\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.5.6\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -3849,7 +3849,7 @@ void command(char c) {
  case 'd':case 'D':recoverDisplay();break;
  case 't':case 'T':displayAutoRecovery=!displayAutoRecovery;
   displayRecoveryAt=millis()+DISPLAY_RECOVERY_MS;
-  Serial.printf("DISPLAY_AUTO_RECOVERY: %s (3000 ms)\n",displayAutoRecovery?"ON":"OFF");break;
+  Serial.printf("DISPLAY_AUTO_RECOVERY: %s (%lu ms)\n",displayAutoRecovery?"ON":"OFF",(unsigned long)DISPLAY_RECOVERY_MS);break;
  case '1':spiHz=10000000;tft.setSPISpeed(spiHz);Serial.println("SPI 10MHz");break;
  case '4':spiHz=40000000;tft.setSPISpeed(spiHz);Serial.println("SPI 40MHz");break;
  default:break;
@@ -3857,7 +3857,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.5.5</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.5.6</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Particle AQI is a live estimate from current PM2.5/PM10 mass readings using EPA breakpoints, without daily or NowCast averaging. VoC Air Quality is the separate Bosch IAQ index after run-in and calibration. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -3892,9 +3892,9 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.5.5");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.5.6");
  WiFi.mode(WIFI_OFF);
- SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
+ SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(FINAL_SPI_HZ);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);
  canvas=new(std::nothrow) GFXcanvas16(240,240);
  if(canvas && !canvas->getBuffer()) {delete canvas;canvas=nullptr;}
@@ -3921,7 +3921,7 @@ void setup() {
  if(!BREATHE_MQTT_HOST[0])Serial.println("MQTT disabled: add BREATHE_MQTT_HOST settings to local secrets.h.");
  Serial.println("n/p next/previous | l details/return | h home | g Bosch | e environment");
  displayRecoveryAt=millis()+DISPLAY_RECOVERY_MS;
- Serial.println("a/SPACE auto-tour | s status | b boot | d reset display | t toggle 3-second display recovery | 1/4 10/40MHz SPI");
+ Serial.println("a/SPACE auto-tour | s status | b boot | d reset display | t toggle 10-second display recovery | 1/4 10/40MHz SPI");
  if(BUTTON_GPIO<0)Serial.println("Physical button disabled: confirmed working configuration was GPIO -1.");
  Serial.println("No demo sensor readings. Bosch BSEC2 IAQ enabled; readiness gated. SCD41 on I2C 0x62.");
  Serial.println("Environment: Si7021 temperature (0x40), RH average of Si7021 + BME680, BME680 pressure.");
