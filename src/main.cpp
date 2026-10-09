@@ -1,5 +1,5 @@
 /*
- BREATHE // INSTRUMENT OS 4.5.3 -- 07 October 2026
+ BREATHE // INSTRUMENT OS 4.5.4 -- 07 October 2026
  Home Assistant MQTT discovery and 10-second telemetry; local credentials only.
  Gas main title: VoC AIR QUALITY; calibration details remain on gas-info6.
  Brighter cyan, amber and violet ribbons frame IAQ; motion requires a valid reading.
@@ -71,7 +71,7 @@
 constexpr char WIFI_SSID[] = "";
 constexpr char WIFI_PASSWORD[] = "";
 #endif
-constexpr char FIRMWARE_VERSION[]="4.5.3";
+constexpr char FIRMWARE_VERSION[]="4.5.4";
 constexpr int BUTTON_GPIO = 3;     // XIAO D1 / GPIO3 -> pushbutton -> GND.
 constexpr bool ENABLE_PMS = true; // Absent PMS simply stays offline.
 constexpr int PMS_RX_GPIO = 20;    // D7 <- PIM477 pin labelled RX (sensor TX).
@@ -90,7 +90,7 @@ constexpr bool ENABLE_SI7021 = true; // Si7021 at 0x40 on the same D4/D5 bus, po
 constexpr uint32_t SI7021_STALE_MS = 6000;
 constexpr bool START_AUTO_TOUR = false;
 constexpr bool INTAKE_ON_LEFT = true; // Visual convention; flip for final enclosure.
-constexpr uint32_t FINAL_SPI_HZ = 40000000;
+constexpr uint32_t FINAL_SPI_HZ = 10000000; // Conservative display link; '4' still selects 40 MHz.
 constexpr uint32_t FRAME_US = 50000, SAMPLE_MS = 2000, TOUR_MS = 15000;
 constexpr uint32_t ENV_STALE_MS = 6000, PM_STALE_MS = 8000, CO2_STALE_MS = 15000;
 constexpr uint32_t DEBOUNCE_MS = 30, HOLD_MS = 700, CLICK_GAP_MS = 350;
@@ -109,7 +109,7 @@ static_assert(BUTTON_GPIO < 0 || (BUTTON_GPIO != 4 && BUTTON_GPIO != 5 &&
  BUTTON_GPIO != 6 && BUTTON_GPIO != 7 && BUTTON_GPIO != 8 && BUTTON_GPIO != 10 &&
  (!ENABLE_PMS || BUTTON_GPIO != PMS_RX_GPIO)), "Button conflicts with sensor/display");
 
-Adafruit_ST7789 tft(&SPI, -1, 5, 4);
+Adafruit_ST7789 tft(&SPI, 9, 5, 4); // CS=D9/GPIO9, DC=D3/GPIO5, RESET=D2/GPIO4.
 Bsec2 bosch;
 Preferences boschStore;
 alignas(8) uint8_t boschMemory[BSEC_INSTANCE_SIZE];
@@ -3707,6 +3707,16 @@ void drawFrame() {
 }
 
 // -------------------------- Serial + local status -------------------------
+// Reinitialize only the display. Acquisition, MQTT and calibration stay active.
+void recoverDisplay() {
+ tft.init(240,240,SPI_MODE3);
+ tft.setRotation(0);
+ tft.setSPISpeed(spiHz);
+ tft.fillScreen(BLACK);
+ writeBacklight(light.duty);
+ bootActive=true;bootAt=nowMs();
+ Serial.printf("DISPLAY_REINIT: CS=9, SPI=%lu Hz\n",(unsigned long)spiHz);
+}
 bool wifiStarted=false, wasConnected=false;
 uint32_t reconnectAt=0, logAt=0, wifiDropouts=0, httpRequests=0;
 #include "home_assistant.h"
@@ -3717,7 +3727,7 @@ String statusJSON() {
  const ParticleAQI paqi=particleAQI();const PressureTrend pressure=pressureTrend();
  Moisture m=ef?moisture(env.t,env.rh):Moisture();
  String s; s.reserve(4500);
- s="{\"firmware\":\"BREATHE 4.5.3\",\"page\":\"";s+=PAGE_NAMES[page];
+ s="{\"firmware\":\"BREATHE 4.5.4\",\"page\":\"";s+=PAGE_NAMES[page];
  s+="\",\"details\":"+jsonBool(detail)+",\"subpage\":"+String(subpage+1);
  char id[24];screenID(id,sizeof(id));s+=",\"screen_id\":\""+String(id)+"\"";
  s+=",\"auto_tour\":"+jsonBool(autoTour)+",\"uptime_s\":"+jsonNumber(nowMs()/1000.0,1);
@@ -3828,6 +3838,7 @@ void command(char c) {
  case 's':case 'S':case 'r':case 'R':printStatus();break;
  case 'a':case 'A':case ' ':autoTour=!autoTour;serviceMode=false;detail=false;subpage=0;pageSince=nowMs();break;
  case 'b':case 'B':home();bootActive=true;bootAt=nowMs();break;
+ case 'd':case 'D':recoverDisplay();break;
  case '1':spiHz=10000000;tft.setSPISpeed(spiHz);Serial.println("SPI 10MHz");break;
  case '4':spiHz=40000000;tft.setSPISpeed(spiHz);Serial.println("SPI 40MHz");break;
  default:break;
@@ -3835,7 +3846,7 @@ void command(char c) {
 }
 const char WEB_PAGE[] PROGMEM=R"HTML(<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATHE</title>
 <style>body{background:#080e16;color:#e5f2f3;font:16px monospace;margin:24px;max-width:850px}button{background:#122733;color:#b2eef4;border:1px solid #467284;padding:12px;margin:3px;font-size:16px}pre{white-space:pre-wrap;font-size:14px}small{color:#9eb7c5}</style>
-<h1>BREATHE // 4.5.3</h1><p>Local instrument controls</p>
+<h1>BREATHE // 4.5.4</h1><p>Local instrument controls</p>
 <button onclick="key('p')">Previous</button><button onclick="key('n')">Next</button><button onclick="key('l')">Details / Return</button><button onclick="key('h')">Home</button><button onclick="key('g')">Bosch</button>
 <p><small>Particle AQI is a live estimate from current PM2.5/PM10 mass readings using EPA breakpoints, without daily or NowCast averaging. VoC Air Quality is the separate Bosch IAQ index after run-in and calibration. Missing/stale current values are null. Times are uptime, not wall-clock time.</small></p>
 <pre id="status">Connecting...</pre><script>
@@ -3870,7 +3881,7 @@ void serviceNetwork() {
 // ------------------------------ Arduino -----------------------------------
 void setup() {
  Serial.begin(115200); // No wait for a USB serial monitor to be opened.
- Serial.println("\nBREATHE INSTRUMENT OS 4.5.3");
+ Serial.println("\nBREATHE INSTRUMENT OS 4.5.4");
  WiFi.mode(WIFI_OFF);
  SPI.begin(8,-1,10,-1);tft.init(240,240,SPI_MODE3);tft.setRotation(0);tft.setSPISpeed(10000000);
  tft.fillScreen(BLACK);center(tft,120,92,"BREATHE",&NumberFont,WHITE);
@@ -3898,7 +3909,7 @@ void setup() {
  startWiFi();logAt=millis()+10000;
  if(!BREATHE_MQTT_HOST[0])Serial.println("MQTT disabled: add BREATHE_MQTT_HOST settings to local secrets.h.");
  Serial.println("n/p next/previous | l details/return | h home | g Bosch | e environment");
- Serial.println("a/SPACE auto-tour | s status | b boot | 1/4 10/40MHz SPI");
+ Serial.println("a/SPACE auto-tour | s status | b boot | d reinitialize display | 1/4 10/40MHz SPI");
  if(BUTTON_GPIO<0)Serial.println("Physical button disabled: confirmed working configuration was GPIO -1.");
  Serial.println("No demo sensor readings. Bosch BSEC2 IAQ enabled; readiness gated. SCD41 on I2C 0x62.");
  Serial.println("Environment: Si7021 temperature (0x40), RH average of Si7021 + BME680, BME680 pressure.");
@@ -3933,3 +3944,4 @@ void loop() {
  delay(1); // yield to USB, Wi-Fi, RTOS, and watchdog
 }
 // -------------------------- END OF COMPLETE FILE --------------------------
+
